@@ -21,9 +21,11 @@ CACHE_FILE="${STATE_DIR}/blocked_ips.txt"
 DOWNLOADER=""
 IPTABLES_BIN=""
 IP6TABLES_BIN=""
+IPSET_BIN=""
 XTABLES_WAIT="${XTABLES_WAIT:-5}"
 RULE_POSITION="${RULE_POSITION:-append}"
 IPV6_ENABLE="${IPV6_ENABLE:-0}"
+IPSET_ENABLE="${IPSET_ENABLE:-0}"
 
 # Outbound (egress) filtering is optional.
 EGF="${EGF:-1}"
@@ -32,6 +34,8 @@ EGF="${EGF:-1}"
 CHAIN="Autosecure"
 # iptables custom chain for actions
 CHAINACT="AutosecureAct"
+IPSET_V4_NAME="AutosecureV4"
+IPSET_V6_NAME="AutosecureV6"
 
 # logger from @phracker
 _log() {
@@ -117,6 +121,19 @@ _fw_cmd() {
     fi
 }
 
+_ipset_cmd() {
+    "$IPSET_BIN" "$@"
+}
+
+_ipset_set_name() {
+    local family="$1"
+    if [ "$family" = "v4" ]; then
+        printf '%s\n' "$IPSET_V4_NAME"
+    else
+        printf '%s\n' "$IPSET_V6_NAME"
+    fi
+}
+
 _ensure_chain() {
     local family="$1"
     local chain="$2"
@@ -153,6 +170,30 @@ _add_block_rules() {
     fi
 }
 
+_add_ipset_rules() {
+    local family="$1"
+    local set_name
+    set_name="$(_ipset_set_name "$family")"
+
+    _fw_cmd "$family" -A "$CHAIN" -m set --match-set "$set_name" src -j "$CHAINACT"
+    if [ "$EGF" -ne 0 ]; then
+        _fw_cmd "$family" -A "$CHAIN" -m set --match-set "$set_name" dst -j "$CHAINACT"
+    fi
+}
+
+_prepare_ipset_for_family() {
+    local family="$1"
+    local set_name
+    set_name="$(_ipset_set_name "$family")"
+
+    if [ "$family" = "v4" ]; then
+        _ipset_cmd create "$set_name" hash:net family inet -exist
+    else
+        _ipset_cmd create "$set_name" hash:net family inet6 -exist
+    fi
+    _ipset_cmd flush "$set_name"
+}
+
 _prepare_chains_for_family() {
     local family="$1"
 
@@ -173,6 +214,11 @@ _prepare_chains_for_family() {
 
     _fw_cmd "$family" -A "$CHAINACT" -j LOG --log-prefix "[AUTOSECURE BLOCK] " -m limit --limit 3/min --limit-burst 10 >/dev/null 2>&1
     _fw_cmd "$family" -A "$CHAINACT" -j DROP >/dev/null 2>&1
+
+    if [ "$IPSET_ENABLE" -eq 1 ]; then
+        _prepare_ipset_for_family "$family"
+        _add_ipset_rules "$family"
+    fi
 }
 
 _apply_list_to_family() {
@@ -187,7 +233,11 @@ _apply_list_to_family() {
         if ! _ip_matches_family "$family" "$ip"; then
             continue
         fi
-        _add_block_rules "$family" "$ip"
+        if [ "$IPSET_ENABLE" -eq 1 ]; then
+            _ipset_cmd add "$(_ipset_set_name "$family")" "$ip" -exist
+        else
+            _add_block_rules "$family" "$ip"
+        fi
         count=$((count + 1))
     done < "$list_file"
 
@@ -266,6 +316,10 @@ _validate_settings() {
         0|1) ;;
         *) _die "IPV6_ENABLE must be 0 or 1 (got: ${IPV6_ENABLE})" ;;
     esac
+    case "$IPSET_ENABLE" in
+        0|1) ;;
+        *) _die "IPSET_ENABLE must be 0 or 1 (got: ${IPSET_ENABLE})" ;;
+    esac
 
     case "$EGF" in
         0|1) ;;
@@ -300,6 +354,10 @@ main() {
     if [ "$IPV6_ENABLE" -eq 1 ]; then
         _require_cmd ip6tables
         IP6TABLES_BIN="$(command -v ip6tables)"
+    fi
+    if [ "$IPSET_ENABLE" -eq 1 ]; then
+        _require_cmd ipset
+        IPSET_BIN="$(command -v ipset)"
     fi
 
     mkdir -p "$TMP_DIR" "$STATE_DIR"

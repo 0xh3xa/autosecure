@@ -78,4 +78,10 @@ else
   exit 1
 fi
 
+ipset_v4_name="$(_ipset_set_name v4)"
+assert_eq "AutosecureV4" "$ipset_v4_name" "ipset v4 name"
+
+ipset_v6_name="$(_ipset_set_name v6)"
+assert_eq "AutosecureV6" "$ipset_v6_name" "ipset v6 name"
+
 printf 'All tests passed.\n'
