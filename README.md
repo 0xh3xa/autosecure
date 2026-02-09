@@ -1,78 +1,124 @@
-# Autosecure Bad-IP Blocking ##
+# Autosecure Bad-IP Blocking
+
 [![Donate BTC](https://img.shields.io/badge/donate-BTC-orange.svg)](https://github.com/koconder/autosecure#contributing-and-donations) [![Donate ETH](https://img.shields.io/badge/donate-ETH-orange.svg)](https://etherdonation.com/d?to=0xe6fbd8de8157934767867022b7a8e8691d8df3dc)
 
-A shell script that grabs a number of spam block-lists such as [Spamhaus DROP & EDROP Lists](https://www.spamhaus.org/drop/), [DSheild](https://en.wikipedia.org/wiki/DShield), and [Abuse.ch Free Hosts and Bad IPs](https://zeustracker.abuse.ch/blocklist.php) and adds them to `iptables` to cut down on spam and other malicious activity.
+Autosecure is a Bash script that downloads known bad-IP blocklists and applies them to Linux `iptables`.
 
-## Uses
-* Secure public facing servers to common treats by blacklisting IP's known for absue
-* Anti-DDOS to some level based on key threats
-* Speed and Realibility using a number of sources to secure servers
+## What It Does
 
-## Sources Used
-<pre>
-Spamhaus DROP List:		https://www.spamhaus.org/drop/drop.txt
-Spamhaus EDROP List:		https://www.spamhaus.org/drop/edrop.txt
-Dsheild Block List:		http://feeds.dshield.org/block.txt
-Abuse.ch Block List:		https://zeustracker.abuse.ch/blocklist.php?download=ipblocklist
-</pre>
+- Creates and refreshes two custom chains: `Autosecure` and `AutosecureAct`
+- Attaches `Autosecure` to `INPUT` and `FORWARD` (and `OUTPUT` when egress filtering is enabled)
+- Downloads and processes these feeds:
+  - Spamhaus DROP: `https://www.spamhaus.org/drop/drop.txt`
+  - Spamhaus EDROP: `https://www.spamhaus.org/drop/edrop.txt`
+  - DShield Block List: `http://feeds.dshield.org/block.txt`
+  - Abuse.ch ZeusTracker blocklist: disabled (endpoint no longer available)
+- Logs and drops matching traffic through `AutosecureAct`
 
-## Installation ##
-Place the script somewhere on your server.
+## Requirements
 
-<pre>
+- Linux host with `iptables`
+- Root privileges (`sudo`)
+- `wget` or `curl`, plus `awk`, `grep`, and `sort`
+
+## Installation
+
+```bash
 # Download the script
 curl -LO https://github.com/koconder/autosecure/raw/master/autosecure.sh
 
-### make it executable
+# Make it executable
 chmod +x autosecure.sh
 
-### set it loose
+# Apply rules
 sudo ./autosecure.sh
 
-### confirm the rules have been added
+# Verify chain contents
 sudo iptables -L Autosecure -n
-</pre>
+```
 
-## Run-time Flags ##
+## Run-Time Flags
 
-To run without output "quite mode", usefull for cronjobs you can use:
-<pre>./autosecure.sh -q</pre>
+- Quiet mode (recommended for cron):
 
-## Automatic Updating ##
-In order for the list to automatically update each day, you'll need to setup a cron job with crontab.
-<pre>
-# fire up the crontab (no sudo)
+```bash
+./autosecure.sh -q
+```
+
+## Automatic Updating
+
+Use `crontab` to refresh rules daily:
+
+```bash
 crontab -e
 
-### run the script every day at 3am
+# Run every day at 03:00
 0 3 * * * /{install location}/autosecure.sh -q
-</pre>
+```
 
+## Troubleshooting
 
-## Troubleshooting ##
-If you need to remove all the Autosecure rules, run the following:
-<pre>
+Flush Autosecure chains:
+
+```bash
 sudo iptables -F Autosecure
 sudo iptables -F AutosecureAct
-</pre>
+```
+
+Detach Autosecure from base chains (if needed):
+
+```bash
+sudo iptables -D INPUT -j Autosecure
+sudo iptables -D FORWARD -j Autosecure
+sudo iptables -D OUTPUT -j Autosecure
+```
+
+Delete Autosecure chains:
+
+```bash
+sudo iptables -X Autosecure
+sudo iptables -X AutosecureAct
+```
+
+## Notes
+
+- This project currently manages IPv4 rules via `iptables` only.
+- Feed availability/format can change over time. A failed feed is skipped and other feeds still apply.
+
+## Validation
+
+Run validations manually:
+
+```bash
+bash -n autosecure.sh
+shellcheck autosecure.sh
+bash tests/test_parsing.sh
+bash tests/test_urls.sh
+```
+
+Use pre-commit for the same checks on each commit:
+
+```bash
+pre-commit install
+pre-commit run --all-files
+```
 
 ## Contributing and Donations
 
-If you find something interesting or would like to contribute, please open issue and start disccussion. Feel free to fork and pull request. If this repo has helped you out feel free to donate via BTC/ETH or to the EFF
-- BTC: 14v9knBDAmJAMxWovuLfy7YkLDyfq8phNb
-- ETH: 0xe6fbd8de8157934767867022b7a8e8691d8df3dc
-- EFF: (https://supporters.eff.org/donate/button)
+If you want to contribute, open an issue or submit a pull request.
 
-## Licences & Contributors ##
+- BTC: `14v9knBDAmJAMxWovuLfy7YkLDyfq8phNb`
+- ETH: `0xe6fbd8de8157934767867022b7a8e8691d8df3dc`
+- EFF: https://supporters.eff.org/donate/button
 
-This script is licenced under GNU GPL v3, please read LICENCE.md for more information.
+## License and Contributors
 
-Based on the initial work from @cowgill and Vivek Gite (nixCraft). The initial work has been since updated with a number of additional sources. All contributions and merges from:
+This project is licensed under GNU GPL v3. See `LICENSE.md`.
 
-<pre>
-David @cowgill
-Vincent Koc @koconder
-Volkan @volkan-k
-Anasxrt @Anasxrt
-ShamimIslam @ShamimIslam
-</pre>
+Based on initial work from @cowgill and Vivek Gite (nixCraft), with contributions from:
+
+- David (@cowgill)
+- Vincent Koc (@koconder)
+- Volkan (@volkan-k)
+- Anasxrt (@Anasxrt)
+- ShamimIslam (@ShamimIslam)
