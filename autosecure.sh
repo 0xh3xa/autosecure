@@ -221,6 +221,11 @@ _parse_extra_feeds() {
     printf '%s\n' "$AUTOSECURE_EXTRA_FEEDS" | tr ',' '\n' | awk 'NF > 0 { print $0 }'
 }
 
+_count_nonempty_lines() {
+    local file="$1"
+    awk 'NF { c++ } END { print c + 0 }' "$file"
+}
+
 _feed_log_label() {
     local url="$1"
     local label="${url#http://}"
@@ -570,6 +575,7 @@ _collect_feed_data() {
     for idx in "${!urls[@]}"; do
         local url="${urls[$idx]}"
         local file="${files[$idx]}"
+        local parsed_file=""
         local feed_num=$((idx + 1))
         local log_label
         log_label="$(_feed_log_label "$url")"
@@ -588,38 +594,48 @@ _collect_feed_data() {
 
         _log "[${feed_num}] Parsing hosts in ${file}..."
         local parser="${parsers[$idx]}"
+        parsed_file="${TMP_DIR}/parsed_${feed_num}.txt"
+        : > "$parsed_file"
         case "$parser" in
             dshield)
-                while IFS= read -r ip; do
-                    [ -n "$ip" ] || continue
-                    if _is_valid_ip_or_cidr "$ip"; then
-                        printf '%s\n' "$ip" >> "$output_file"
-                    fi
-                done < <(_parse_dshield_file "$file")
+                _parse_dshield_file "$file" > "$parsed_file"
                 ;;
             alienvault)
-                while IFS= read -r ip; do
-                    [ -n "$ip" ] || continue
-                    if _is_valid_ip_or_cidr "$ip"; then
-                        printf '%s\n' "$ip" >> "$output_file"
-                    fi
-                done < <(_parse_alienvault_file "$file")
+                _parse_alienvault_file "$file" > "$parsed_file"
                 ;;
             *)
-                while IFS= read -r ip; do
-                    [ -n "$ip" ] || continue
-                    if _is_valid_ip_or_cidr "$ip"; then
-                        printf '%s\n' "$ip" >> "$output_file"
-                    fi
-                done < <(_parse_static_blocklist_file "$file")
+                _parse_static_blocklist_file "$file" > "$parsed_file"
                 ;;
         esac
+
+        local parsed_count=0
+        local valid_count=0
+        local invalid_count=0
+        parsed_count="$(_count_nonempty_lines "$parsed_file")"
+
+        while IFS= read -r ip; do
+            [ -n "$ip" ] || continue
+            if _is_valid_ip_or_cidr "$ip"; then
+                printf '%s\n' "$ip" >> "$output_file"
+                valid_count=$((valid_count + 1))
+            else
+                invalid_count=$((invalid_count + 1))
+            fi
+        done < "$parsed_file"
+
+        _log "[${feed_num}] Stats: parsed=${parsed_count}, valid=${valid_count}, invalid=${invalid_count}"
+        rm -f "$parsed_file"
 
         _log "[${feed_num}] Done parsing ${file}. Removing..."
         rm -f "$file"
     done
 
+    local pre_dedupe_count=0
+    local final_count=0
+    pre_dedupe_count="$(_count_nonempty_lines "$output_file")"
     sort -u -o "$output_file" "$output_file"
+    final_count="$(_count_nonempty_lines "$output_file")"
+    _log "Feed summary: collected=${pre_dedupe_count}, unique=${final_count}, deduped=$((pre_dedupe_count - final_count))"
 }
 
 _fw_cmd() {
@@ -763,6 +779,15 @@ _apply_with_nft() {
         fi
     done < "$list_file"
 
+    local v4_count=0
+    local v6_count=0
+    if [ "$first_v4" -eq 0 ]; then
+        v4_count="$(_count_family_entries v4 "$list_file")"
+    fi
+    if [ "$first_v6" -eq 0 ]; then
+        v6_count="$(_count_family_entries v6 "$list_file")"
+    fi
+
     local output_rules="${TMP_DIR}/autosecure.nft"
 
     {
@@ -812,7 +837,7 @@ _apply_with_nft() {
     } > "$output_rules"
 
     "$NFT_BIN" -f "$output_rules"
-    _log "[nft] Applied nftables table '${NFT_TABLE}'."
+    _log "[nft] Applied nftables table '${NFT_TABLE}' (entries: v4=${v4_count}, v6=${v6_count})."
 }
 
 _pf_bootstrap_anchor() {
@@ -869,7 +894,13 @@ PFEOF
     _pfctl_exec -q -a "$PF_ANCHOR" -t autosecure_bad_hosts -T replace -f "$list_file" >/dev/null
     _pfctl_exec -q -e >/dev/null || true
 
-    _log "[pf] Applied anchor '${PF_ANCHOR}'."
+    local total_count=0
+    local v4_count=0
+    local v6_count=0
+    total_count="$(_count_nonempty_lines "$list_file")"
+    v4_count="$(_count_family_entries v4 "$list_file")"
+    v6_count="$(_count_family_entries v6 "$list_file")"
+    _log "[pf] Applied anchor '${PF_ANCHOR}' (entries: total=${total_count}, v4=${v4_count}, v6=${v6_count})."
 }
 
 main() {
@@ -999,7 +1030,9 @@ main() {
     if [ ! -s "$staged_list" ]; then
         if [ -s "$CACHE_FILE" ]; then
             active_list="$CACHE_FILE"
-            _log "No valid new feed data; using cached blocklist from ${CACHE_FILE}."
+            local cache_count=0
+            cache_count="$(_count_nonempty_lines "$CACHE_FILE")"
+            _log "No valid new feed data; using cached blocklist from ${CACHE_FILE} (${cache_count} entries)."
         else
             _die "No valid feed data and no cache available. Existing firewall rules left unchanged."
         fi
