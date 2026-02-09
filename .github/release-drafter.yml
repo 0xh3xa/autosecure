@@ -8,31 +8,28 @@ template: |
   $CONTRIBUTORS
 
 categories:
-  - title: "Features"
+  - title: "🚀 Features"
     labels:
+      - "feature"
+      - "enhancement"
       - "feat"
-  - title: "Fixes"
+  - title: "🐛 Fixes"
     labels:
+      - "bug"
       - "fix"
-  - title: "Performance"
+  - title: "🧰 Maintenance"
     labels:
-      - "perf"
-  - title: "Refactors"
-    labels:
-      - "refactor"
-  - title: "Documentation"
-    labels:
-      - "docs"
-  - title: "Build & CI"
-    labels:
-      - "build"
       - "ci"
-  - title: "Tests"
-    labels:
-      - "test"
-  - title: "Chores"
-    labels:
       - "chore"
+      - "dependencies"
+      - "dep"
+      - "deps"
+      - "docs"
+      - "refactor"
+      - "test"
+      - "tests"
+      - "build"
+      - "perf"
   - title: "Other Changes"
     labels:
       - "other"
@@ -47,16 +44,23 @@ version-resolver:
   minor:
     labels:
       - "feat"
+      - "feature"
+      - "enhancement"
   patch:
     labels:
       - "fix"
+      - "bug"
       - "perf"
       - "refactor"
       - "docs"
       - "build"
       - "ci"
       - "test"
+      - "tests"
       - "chore"
+      - "dependencies"
+      - "dep"
+      - "deps"
       - "other"
   default: patch
 
@@ -64,9 +68,18 @@ autolabeler:
   - label: "feat"
     title:
       - '/^feat(\(.+\))?:/i'
+  - label: "feature"
+    title:
+      - '/^feature(\(.+\))?:/i'
+  - label: "enhancement"
+    title:
+      - '/^enhancement(\(.+\))?:/i'
   - label: "fix"
     title:
       - '/^fix(\(.+\))?:/i'
+  - label: "bug"
+    title:
+      - '/^bug(\(.+\))?:/i'
   - label: "perf"
     title:
       - '/^perf(\(.+\))?:/i'
@@ -85,9 +98,21 @@ autolabeler:
   - label: "test"
     title:
       - '/^test(\(.+\))?:/i'
+  - label: "tests"
+    title:
+      - '/^tests(\(.+\))?:/i'
   - label: "chore"
     title:
       - '/^chore(\(.+\))?:/i'
+  - label: "dep"
+    title:
+      - '/^dep(\(.+\))?:/i'
+  - label: "deps"
+    title:
+      - '/^deps(\(.+\))?:/i'
+  - label: "dependencies"
+    title:
+      - '/^dependencies(\(.+\))?:/i'
   - label: "other"
     title:
       - '/.*/'

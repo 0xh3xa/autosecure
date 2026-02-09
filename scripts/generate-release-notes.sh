@@ -18,52 +18,68 @@ else
 fi
 
 COMMITS="$(git log --pretty=format:'%h%x09%s' "${RANGE}")"
+COMMON_PREFIX_RE='^[[:space:]]*(feat|feature|enhancement|fix|bug|perf|refactor|docs|build|ci|test|tests|chore|dependencies|dep|deps)(\([^)]+\))?:'
 
 emit() {
+  local line="$1"
   if [ -n "$OUTPUT_FILE" ]; then
-    printf '%s\n' "$1" >> "$OUTPUT_FILE"
+    printf '%s\n' "$line" >> "$OUTPUT_FILE"
   else
-    printf '%s\n' "$1"
+    printf '%s\n' "$line"
   fi
+}
+
+subject_matches() {
+  local subject="$1"
+  local pattern="$2"
+  printf '%s\n' "$subject" | grep -Eq "$pattern"
 }
 
 if [ -n "$OUTPUT_FILE" ]; then
   : > "$OUTPUT_FILE"
 fi
 
-add_section() {
-  local title="$1"
-  local pattern="$2"
-  local matches
-  matches="$(printf '%s\n' "${COMMITS}" | grep -E "${pattern}" || true)"
-  [ -n "$matches" ] || return 0
-  emit "### ${title}"
-  while IFS=$'\t' read -r sha subject; do
-    [ -n "$sha" ] || continue
-    emit "- ${subject} (\`${sha}\`)"
-  done <<< "$matches"
-  emit ""
-}
-
 emit "## What's Changed"
 emit ""
 
-add_section "Features" '^([[:space:]]*)?feat(\([^)]+\))?:'
-add_section "Fixes" '^([[:space:]]*)?fix(\([^)]+\))?:'
-add_section "Performance" '^([[:space:]]*)?perf(\([^)]+\))?:'
-add_section "Refactors" '^([[:space:]]*)?refactor(\([^)]+\))?:'
-add_section "Documentation" '^([[:space:]]*)?docs(\([^)]+\))?:'
-add_section "Build & CI" '^([[:space:]]*)?(build|ci)(\([^)]+\))?:'
-add_section "Tests" '^([[:space:]]*)?test(\([^)]+\))?:'
-add_section "Chores" '^([[:space:]]*)?chore(\([^)]+\))?:'
+add_section() {
+  local title="$1"
+  local pattern="$2"
+  local count=0
 
-OTHER="$(printf '%s\n' "${COMMITS}" | grep -Ev '^([[:space:]]*)?(feat|fix|perf|refactor|docs|build|ci|test|chore)(\([^)]+\))?:' || true)"
-if [ -n "$OTHER" ]; then
-  emit "### Other Changes"
   while IFS=$'\t' read -r sha subject; do
     [ -n "$sha" ] || continue
+    if subject_matches "$subject" "$pattern"; then
+      if [ "$count" -eq 0 ]; then
+        emit "### ${title}"
+      fi
+      emit "- ${subject} (\`${sha}\`)"
+      count=$((count + 1))
+    fi
+  done <<< "$COMMITS"
+
+  if [ "$count" -gt 0 ]; then
+    emit ""
+  fi
+}
+
+add_section "🚀 Features" '^[[:space:]]*(feat|feature|enhancement)(\([^)]+\))?:'
+add_section "🐛 Fixes" '^[[:space:]]*(fix|bug)(\([^)]+\))?:'
+add_section "🧰 Maintenance" '^[[:space:]]*(perf|refactor|docs|build|ci|test|tests|chore|dependencies|dep|deps)(\([^)]+\))?:'
+
+other_count=0
+while IFS=$'\t' read -r sha subject; do
+  [ -n "$sha" ] || continue
+  if ! subject_matches "$subject" "$COMMON_PREFIX_RE"; then
+    if [ "$other_count" -eq 0 ]; then
+      emit "### Other Changes"
+    fi
     emit "- ${subject} (\`${sha}\`)"
-  done <<< "$OTHER"
+    other_count=$((other_count + 1))
+  fi
+done <<< "$COMMITS"
+
+if [ "$other_count" -gt 0 ]; then
   emit ""
 fi
 
