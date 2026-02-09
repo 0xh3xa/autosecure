@@ -16,3 +16,8 @@ repos:
         entry: bash tests/test_parsing.sh
         language: system
         pass_filenames: false
+      - id: bash-url-tests
+        name: bash URL checks (offline-safe)
+        entry: env AUTOSECURE_SKIP_NETWORK_TESTS=1 bash tests/test_urls.sh
+        language: system
+        pass_filenames: false

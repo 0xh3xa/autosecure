@@ -16,17 +16,29 @@ URLS=(
 
 get_http_code() {
   local url="$1"
-  if command -v curl >/dev/null 2>&1; then
-    curl -sS -L --max-time 30 -o /dev/null -w "%{http_code}" "$url"
-    return 0
-  fi
+  local attempt
+  local code=""
 
-  if command -v wget >/dev/null 2>&1; then
-    wget -q --spider --server-response "$url" 2>&1 | awk '/^  HTTP\// { code=$2 } END { print code }'
-    return 0
-  fi
+  for attempt in 1 2 3; do
+    if command -v curl >/dev/null 2>&1; then
+      code="$(curl -sS -L --max-time 30 -o /dev/null -w "%{http_code}" "$url" || true)"
+    elif command -v wget >/dev/null 2>&1; then
+      code="$(wget -q --spider --server-response "$url" 2>&1 | awk '/^  HTTP\// { c=$2 } END { print c }')"
+    else
+      code="000"
+    fi
 
-  echo "000"
+    if [ "$code" = "200" ]; then
+      echo "$code"
+      return 0
+    fi
+
+    # transient network failures are common in CI; retry a few times
+    echo "Attempt ${attempt}/3 for ${url} returned ${code:-000}, retrying..."
+    sleep 2
+  done
+
+  echo "${code:-000}"
 }
 
 for url in "${URLS[@]}"; do

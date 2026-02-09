@@ -38,7 +38,21 @@ jobs:
           CHECKSUMS_URL="https://github.com/${SOURCE_REPO}/releases/download/${TAG}/sha256sums.txt"
           TARBALL_URL="https://github.com/${SOURCE_REPO}/releases/download/${TAG}/${TARBALL}"
 
-          curl -fsSL "${CHECKSUMS_URL}" -o /tmp/sha256sums.txt
+          # Release assets may take a moment to propagate after publish.
+          success=0
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL "${CHECKSUMS_URL}" -o /tmp/sha256sums.txt; then
+              success=1
+              break
+            fi
+            echo "Attempt ${attempt}/5 failed; retrying in 5s..."
+            sleep 5
+          done
+          if [ "${success}" -ne 1 ]; then
+            echo "Unable to download checksum file: ${CHECKSUMS_URL}"
+            exit 1
+          fi
+
           SHA256="$(awk -v f="${TARBALL}" '$2 == f {print $1}' /tmp/sha256sums.txt)"
           if [ -z "${SHA256}" ]; then
             echo "Unable to find checksum for ${TARBALL} in sha256sums.txt"
