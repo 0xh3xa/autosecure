@@ -124,7 +124,11 @@ jobs:
       - name: Verify checksum signature
         run: |
           set -euo pipefail
-          WORKFLOW_IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${RELEASE_TAG}"
+          WORKFLOW_REF="${GITHUB_REF}"
+          if [[ "${WORKFLOW_REF}" != refs/* ]]; then
+            WORKFLOW_REF="refs/heads/${GITHUB_REF_NAME}"
+          fi
+          WORKFLOW_IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${WORKFLOW_REF}"
           cosign verify-blob dist/sha256sums.txt \
             --certificate dist/sha256sums.txt.pem \
             --signature dist/sha256sums.txt.sig \
