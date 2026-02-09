@@ -849,7 +849,7 @@ _apply_with_nft() {
     } > "$output_rules"
 
     "$NFT_BIN" -f "$output_rules"
-    _log "[nft] Applied nftables table '${NFT_TABLE}' (entries: v4=${v4_count}, v6=${v6_count})."
+    _log "[nft] Applied nftables table '${NFT_TABLE}' (entries: ipv4=${v4_count}, ipv6=${v6_count})."
 }
 
 _pf_bootstrap_anchor() {
@@ -914,7 +914,7 @@ PFEOF
     total_count="$(_count_nonempty_lines "$list_file")"
     v4_count="$(_count_family_entries v4 "$list_file")"
     v6_count="$(_count_family_entries v6 "$list_file")"
-    _log "[pf] Applied anchor '${PF_ANCHOR}' (entries: total=${total_count}, v4=${v4_count}, v6=${v6_count})."
+    _log "[pf] Applied anchor '${PF_ANCHOR}' (entries: total=${total_count}, ipv4=${v4_count}, ipv6=${v6_count})."
 }
 
 main() {
