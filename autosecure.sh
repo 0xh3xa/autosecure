@@ -12,6 +12,8 @@ set -euo pipefail
 QUIET=0
 DRY_RUN=0
 DRY_RUN_OUTPUT=""
+COLOR_MODE="${AUTOSECURE_COLOR:-auto}"
+COLOR_ENABLED=0
 LOG_FILE="/var/log/autosecure.log"
 TMP_DIR="/tmp/autosecure"
 STATE_DIR="/var/lib/autosecure"
@@ -57,16 +59,26 @@ PF_ANCHOR_FILE="/etc/pf.anchors/${PF_ANCHOR}"
 AUTOSECURE_EXTRA_FEEDS="${AUTOSECURE_EXTRA_FEEDS:-${EXTRA_FEEDS:-}}"
 
 _print_banner() {
-    cat <<'EOF'
+    if [ "$COLOR_ENABLED" -eq 1 ]; then
+        printf '%b\n' "${COLOR_CYAN} ▀▀█▄ ██ ██ ▀██▀▀ ▄███▄ ▄█▀▀▀ ▄█▀█▄ ▄████ ██ ██ ████▄ ▄█▀█▄${COLOR_RESET}"
+        printf '%b\n' "${COLOR_CYAN}▄█▀██ ██ ██  ██   ██ ██ ▀███▄ ██▄█▀ ██    ██ ██ ██ ▀▀ ██▄█▀${COLOR_RESET}"
+        printf '%b\n' "${COLOR_CYAN}▀█▄██ ▀██▀█  ██   ▀███▀ ▄▄▄█▀ ▀█▄▄▄ ▀████ ▀██▀█ ██    ▀█▄▄▄${COLOR_RESET}"
+    else
+        cat <<'EOF'
  ▀▀█▄ ██ ██ ▀██▀▀ ▄███▄ ▄█▀▀▀ ▄█▀█▄ ▄████ ██ ██ ████▄ ▄█▀█▄
 ▄█▀██ ██ ██  ██   ██ ██ ▀███▄ ██▄█▀ ██    ██ ██ ██ ▀▀ ██▄█▀
 ▀█▄██ ▀██▀█  ██   ▀███▀ ▄▄▄█▀ ▀█▄▄▄ ▀████ ▀██▀█ ██    ▀█▄▄▄
 EOF
+    fi
 }
 
 _print_startup_header() {
     _print_banner
-    printf '🔑 autosecure - made with love by Vincent Koc\n'
+    if [ "$COLOR_ENABLED" -eq 1 ]; then
+        printf '%b\n' "${COLOR_GREEN}🔑 autosecure - made with love by Vincent Koc${COLOR_RESET}"
+    else
+        printf '🔑 autosecure - made with love by Vincent Koc\n'
+    fi
     printf '\n'
 }
 
@@ -80,6 +92,8 @@ Options:
   -n, --dry-run   Generate rules preview only; do not apply firewall changes.
   -o, --dry-run-output <file>
                   Write dry-run report to a specific file path.
+  --color <mode>  Color output mode: auto|always|never.
+  --color=<mode>  Color output mode: auto|always|never.
   -h, --help      Show this help message and exit.
   -V, --version   Show version and exit.
 
@@ -91,6 +105,7 @@ Environment:
   AUTOSECURE_IPSET_ENABLE=0|1
   AUTOSECURE_EXTRA_FEEDS=<url1,url2,...>
   AUTOSECURE_EGF=0|1
+  AUTOSECURE_COLOR=auto|always|never
 EOF
 }
 
@@ -102,7 +117,11 @@ _log() {
     if [ "$QUIET" -eq 0 ]; then
         local msg
         msg="$(date "+%Y-%m-%d %H:%M:%S.%N"): $*"
-        printf '%s\n' "$msg"
+        if [ "$COLOR_ENABLED" -eq 1 ]; then
+            printf '%b\n' "${COLOR_DIM}${msg}${COLOR_RESET}"
+        else
+            printf '%s\n' "$msg"
+        fi
         ( printf '%s\n' "$msg" >> "$LOG_FILE" ) 2>/dev/null || true
     fi
 }
@@ -229,6 +248,43 @@ _parse_extra_feeds() {
 
 _pf_is_enabled() {
     "$PFCTL_BIN" -s info 2>/dev/null | awk -F': ' '/^Status:/ { print $2 }' | grep -qi '^enabled'
+}
+
+_setup_colors() {
+    COLOR_RESET=""
+    COLOR_DIM=""
+    COLOR_CYAN=""
+    COLOR_GREEN=""
+
+    case "$COLOR_MODE" in
+        auto)
+            if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+                COLOR_ENABLED=1
+            else
+                COLOR_ENABLED=0
+            fi
+            ;;
+        always)
+            if [ -z "${NO_COLOR:-}" ]; then
+                COLOR_ENABLED=1
+            else
+                COLOR_ENABLED=0
+            fi
+            ;;
+        never)
+            COLOR_ENABLED=0
+            ;;
+        *)
+            _die "AUTOSECURE_COLOR/--color must be auto|always|never (got: ${COLOR_MODE})"
+            ;;
+    esac
+
+    if [ "$COLOR_ENABLED" -eq 1 ]; then
+        COLOR_RESET="$(printf '\033[0m')"
+        COLOR_DIM="$(printf '\033[2m')"
+        COLOR_CYAN="$(printf '\033[36m')"
+        COLOR_GREEN="$(printf '\033[32m')"
+    fi
 }
 
 _count_nonempty_lines() {
@@ -935,7 +991,19 @@ main() {
                 DRY_RUN_OUTPUT="$2"
                 shift 2
                 ;;
+            --color)
+                if [ "$#" -lt 2 ]; then
+                    _die "--color requires a value: auto|always|never"
+                fi
+                COLOR_MODE="$2"
+                shift 2
+                ;;
+            --color=*)
+                COLOR_MODE="${1#--color=}"
+                shift
+                ;;
             -h|--help)
+                _setup_colors
                 _print_help
                 exit 0
                 ;;
@@ -952,6 +1020,8 @@ main() {
     if [ "${EUID:-$(id -u)}" -ne 0 ] && [ "$DRY_RUN" -ne 1 ]; then
         _die "This script must run as root."
     fi
+
+    _setup_colors
 
     if [ "$QUIET" -eq 0 ] && [ -t 1 ]; then
         _print_startup_header
