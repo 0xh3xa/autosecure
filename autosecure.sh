@@ -580,6 +580,8 @@ _collect_feed_data() {
         parsers+=("static")
     done < <(_parse_extra_feeds)
 
+    _log "Feed sources configured: ${#urls[@]}"
+
     : > "$output_file"
 
     for idx in "${!urls[@]}"; do
