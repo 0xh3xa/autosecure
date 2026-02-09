@@ -54,7 +54,18 @@ PF_ANCHOR_FILE="/etc/pf.anchors/${PF_ANCHOR}"
 # Example: AUTOSECURE_EXTRA_FEEDS="https://example.com/feed1.txt,https://example.com/feed2.txt"
 AUTOSECURE_EXTRA_FEEDS="${AUTOSECURE_EXTRA_FEEDS:-${EXTRA_FEEDS:-}}"
 
+_print_banner() {
+    cat <<'EOF'
+             ██
+ ▀▀█▄ ██ ██ ▀██▀▀ ▄███▄ ▄█▀▀▀ ▄█▀█▄ ▄████ ██ ██ ████▄ ▄█▀█▄
+▄█▀██ ██ ██  ██   ██ ██ ▀███▄ ██▄█▀ ██    ██ ██ ██ ▀▀ ██▄█▀
+▀█▄██ ▀██▀█  ██   ▀███▀ ▄▄▄█▀ ▀█▄▄▄ ▀████ ▀██▀█ ██    ▀█▄▄▄
+EOF
+}
+
 _print_help() {
+    _print_banner
+    printf '\n'
     cat <<'EOF'
 Usage: autosecure.sh [options]
 
@@ -554,6 +565,10 @@ main() {
 
     if [ "${EUID:-$(id -u)}" -ne 0 ]; then
         _die "This script must run as root."
+    fi
+
+    if [ "$QUIET" -eq 0 ] && [ -t 1 ]; then
+        _print_banner
     fi
 
     _validate_settings
