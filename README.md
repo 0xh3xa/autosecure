@@ -88,6 +88,18 @@ Then apply rules:
 sudo autosecure.sh -q
 ```
 
+Preview-only (no firewall changes), with timestamped output:
+
+```bash
+sudo autosecure.sh --dry-run
+```
+
+Preview-only with explicit output path:
+
+```bash
+sudo autosecure.sh --dry-run --dry-run-output /tmp/autosecure-rules.txt
+```
+
 Or force a backend:
 
 ```bash
@@ -129,6 +141,15 @@ sudo make install-man
 - `http://feeds.dshield.org/block.txt`
 
 Note: ZeusTracker feed is intentionally disabled because the endpoint is no longer available.
+
+## macOS Notes (`pf`/`pfctl`)
+
+- On macOS, backend `auto` selects `pf`.
+- First run auto-bootstraps `/etc/pf.conf` with:
+  - `anchor "autosecure"`
+  - `load anchor "autosecure" from "/etc/pf.anchors/autosecure"`
+- Runtime rules are loaded into the `autosecure` anchor and table `autosecure_bad_hosts` via `pfctl`.
+- The common `pfctl -f` warning about flushing startup rules is filtered from output, while real `pfctl` errors are still shown.
 
 ## Scheduled Updates
 

@@ -10,6 +10,8 @@ set -euo pipefail
 
 # Runtime defaults
 QUIET=0
+DRY_RUN=0
+DRY_RUN_OUTPUT=""
 LOG_FILE="/var/log/autosecure.log"
 TMP_DIR="/tmp/autosecure"
 STATE_DIR="/var/lib/autosecure"
@@ -71,6 +73,9 @@ Usage: autosecure.sh [options]
 
 Options:
   -q              Quiet mode (cron-friendly).
+  -n, --dry-run   Generate rules preview only; do not apply firewall changes.
+  -o, --dry-run-output <file>
+                  Write dry-run report to a specific file path.
   -h, --help      Show this help message and exit.
   -V, --version   Show version and exit.
 
@@ -91,7 +96,10 @@ _print_version() {
 
 _log() {
     if [ "$QUIET" -eq 0 ]; then
-        printf "%s: %s\n" "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$*" | tee -a "$LOG_FILE"
+        local msg
+        msg="$(date "+%Y-%m-%d %H:%M:%S.%N"): $*"
+        printf '%s\n' "$msg"
+        ( printf '%s\n' "$msg" >> "$LOG_FILE" ) 2>/dev/null || true
     fi
 }
 
@@ -201,6 +209,250 @@ _parse_extra_feeds() {
     printf '%s\n' "$AUTOSECURE_EXTRA_FEEDS" | tr ',' '\n' | awk 'NF > 0 { print $0 }'
 }
 
+_count_family_entries() {
+    local family="$1"
+    local list_file="$2"
+    local count=0
+    local ip=""
+    while IFS= read -r ip; do
+        [ -n "$ip" ] || continue
+        if _ip_matches_family "$family" "$ip"; then
+            count=$((count + 1))
+        fi
+    done < "$list_file"
+    printf '%s\n' "$count"
+}
+
+_render_iptables_dry_run() {
+    local list_file="$1"
+    local out_file="$2"
+    local ip=""
+    local family=""
+    local fwbin=""
+
+    {
+        echo "[iptables] chain preparation"
+        echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -N ${CHAIN} || ${IPTABLES_BIN} -w ${XTABLES_WAIT} -F ${CHAIN}"
+        echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -N ${CHAINACT} || ${IPTABLES_BIN} -w ${XTABLES_WAIT} -F ${CHAINACT}"
+        if [ "$RULE_POSITION" = "top" ]; then
+            echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -I INPUT -j ${CHAIN}"
+            echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -I FORWARD -j ${CHAIN}"
+            if [ "$EGF" -ne 0 ]; then
+                echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -I OUTPUT -j ${CHAIN}"
+            fi
+        else
+            echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -A INPUT -j ${CHAIN}"
+            echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -A FORWARD -j ${CHAIN}"
+            if [ "$EGF" -ne 0 ]; then
+                echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -A OUTPUT -j ${CHAIN}"
+            fi
+        fi
+        echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -A ${CHAINACT} -j LOG --log-prefix \"[AUTOSECURE BLOCK] \" -m limit --limit 3/min --limit-burst 10"
+        echo "${IPTABLES_BIN} -w ${XTABLES_WAIT} -A ${CHAINACT} -j DROP"
+    } >> "$out_file"
+
+    for family in v4 v6; do
+        if [ "$family" = "v6" ] && [ "$IPV6_ENABLE" -ne 1 ]; then
+            continue
+        fi
+        if [ "$family" = "v4" ]; then
+            fwbin="$IPTABLES_BIN"
+        else
+            fwbin="$IP6TABLES_BIN"
+        fi
+
+        if [ "$IPSET_ENABLE" -eq 1 ]; then
+            {
+                echo
+                echo "[iptables/${family}] ipset mode"
+                if [ "$family" = "v4" ]; then
+                    echo "${IPSET_BIN} create ${IPSET_V4_NAME} hash:net family inet -exist"
+                    echo "${IPSET_BIN} flush ${IPSET_V4_NAME}"
+                    echo "${fwbin} -w ${XTABLES_WAIT} -A ${CHAIN} -m set --match-set ${IPSET_V4_NAME} src -j ${CHAINACT}"
+                    if [ "$EGF" -ne 0 ]; then
+                        echo "${fwbin} -w ${XTABLES_WAIT} -A ${CHAIN} -m set --match-set ${IPSET_V4_NAME} dst -j ${CHAINACT}"
+                    fi
+                else
+                    echo "${IPSET_BIN} create ${IPSET_V6_NAME} hash:net family inet6 -exist"
+                    echo "${IPSET_BIN} flush ${IPSET_V6_NAME}"
+                    echo "${fwbin} -w ${XTABLES_WAIT} -A ${CHAIN} -m set --match-set ${IPSET_V6_NAME} src -j ${CHAINACT}"
+                    if [ "$EGF" -ne 0 ]; then
+                        echo "${fwbin} -w ${XTABLES_WAIT} -A ${CHAIN} -m set --match-set ${IPSET_V6_NAME} dst -j ${CHAINACT}"
+                    fi
+                fi
+            } >> "$out_file"
+
+            while IFS= read -r ip; do
+                [ -n "$ip" ] || continue
+                if ! _ip_matches_family "$family" "$ip"; then
+                    continue
+                fi
+                if [ "$family" = "v4" ]; then
+                    echo "${IPSET_BIN} add ${IPSET_V4_NAME} ${ip} -exist" >> "$out_file"
+                else
+                    echo "${IPSET_BIN} add ${IPSET_V6_NAME} ${ip} -exist" >> "$out_file"
+                fi
+            done < "$list_file"
+        else
+            {
+                echo
+                echo "[iptables/${family}] direct rules"
+            } >> "$out_file"
+
+            while IFS= read -r ip; do
+                [ -n "$ip" ] || continue
+                if ! _ip_matches_family "$family" "$ip"; then
+                    continue
+                fi
+                echo "${fwbin} -w ${XTABLES_WAIT} -A ${CHAIN} -s ${ip} -j ${CHAINACT}" >> "$out_file"
+                if [ "$EGF" -ne 0 ]; then
+                    echo "${fwbin} -w ${XTABLES_WAIT} -A ${CHAIN} -d ${ip} -j ${CHAINACT}" >> "$out_file"
+                fi
+            done < "$list_file"
+        fi
+    done
+}
+
+_render_nft_dry_run() {
+    local list_file="$1"
+    local out_file="$2"
+    local ip=""
+    local v4_elements=""
+    local v6_elements=""
+    local first_v4=1
+    local first_v6=1
+
+    while IFS= read -r ip; do
+        [ -n "$ip" ] || continue
+        if _ip_matches_family v4 "$ip"; then
+            if [ "$first_v4" -eq 1 ]; then
+                v4_elements="$ip"
+                first_v4=0
+            else
+                v4_elements="${v4_elements}, ${ip}"
+            fi
+        else
+            if [ "$first_v6" -eq 1 ]; then
+                v6_elements="$ip"
+                first_v6=0
+            else
+                v6_elements="${v6_elements}, ${ip}"
+            fi
+        fi
+    done < "$list_file"
+
+    {
+        echo "[nft] ruleset preview"
+        echo "flush table inet ${NFT_TABLE}"
+        echo "table inet ${NFT_TABLE} {"
+        echo "  set bad_ipv4 {"
+        echo "    type ipv4_addr"
+        echo "    flags interval"
+        if [ -n "$v4_elements" ]; then
+            echo "    elements = { ${v4_elements} }"
+        fi
+        echo "  }"
+        echo "  set bad_ipv6 {"
+        echo "    type ipv6_addr"
+        echo "    flags interval"
+        if [ -n "$v6_elements" ]; then
+            echo "    elements = { ${v6_elements} }"
+        fi
+        echo "  }"
+        echo "  chain input {"
+        echo "    type filter hook input priority 0; policy accept;"
+        echo "    ip saddr @bad_ipv4 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+        if [ "$IPV6_ENABLE" -eq 1 ]; then
+            echo "    ip6 saddr @bad_ipv6 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+        fi
+        echo "  }"
+        echo "  chain forward {"
+        echo "    type filter hook forward priority 0; policy accept;"
+        echo "    ip saddr @bad_ipv4 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+        if [ "$IPV6_ENABLE" -eq 1 ]; then
+            echo "    ip6 saddr @bad_ipv6 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+        fi
+        echo "  }"
+        if [ "$EGF" -ne 0 ]; then
+            echo "  chain output {"
+            echo "    type filter hook output priority 0; policy accept;"
+            echo "    ip daddr @bad_ipv4 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+            if [ "$IPV6_ENABLE" -eq 1 ]; then
+                echo "    ip6 daddr @bad_ipv6 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+            fi
+            echo "  }"
+        fi
+        echo "}"
+        echo
+        echo "would run: ${NFT_BIN} -f <rules-file>"
+    } >> "$out_file"
+}
+
+_render_pf_dry_run() {
+    local list_file="$1"
+    local out_file="$2"
+
+    {
+        echo "[pf] anchor preview"
+        echo "anchor: ${PF_ANCHOR}"
+        echo "anchor file: ${PF_ANCHOR_FILE}"
+        echo
+        echo "anchor content:"
+        echo "table <autosecure_bad_hosts> persist"
+        echo "block in quick from <autosecure_bad_hosts> to any"
+        if [ "$EGF" -ne 0 ]; then
+            echo "block out quick from any to <autosecure_bad_hosts>"
+        fi
+        echo
+        echo "would run: ${PFCTL_BIN} -a ${PF_ANCHOR} -f ${PF_ANCHOR_FILE}"
+        echo "would run: ${PFCTL_BIN} -a ${PF_ANCHOR} -t autosecure_bad_hosts -T replace -f <list-file>"
+        echo "would run: ${PFCTL_BIN} -e"
+        echo
+        echo "block entries:"
+        cat "$list_file"
+    } >> "$out_file"
+}
+
+_write_dry_run_report() {
+    local list_file="$1"
+    local report_file="${DRY_RUN_OUTPUT}"
+    local ts=""
+    local total_count=0
+    local v4_count=0
+    local v6_count=0
+
+    if [ -z "$report_file" ]; then
+        ts="$(date "+%Y%m%d-%H%M%S")"
+        report_file="${TMP_DIR}/autosecure-dryrun-${ts}.txt"
+    fi
+
+    total_count="$(awk 'NF{c++} END {print c+0}' "$list_file")"
+    v4_count="$(_count_family_entries v4 "$list_file")"
+    v6_count="$(_count_family_entries v6 "$list_file")"
+
+    {
+        echo "AUTOSECURE DRY RUN"
+        echo "generated_at: $(date "+%Y-%m-%d %H:%M:%S")"
+        echo "backend: ${FIREWALL_BACKEND}"
+        echo "entries_total: ${total_count}"
+        echo "entries_v4: ${v4_count}"
+        echo "entries_v6: ${v6_count}"
+        echo "rule_position: ${RULE_POSITION}"
+        echo "ipv6_enable: ${IPV6_ENABLE}"
+        echo "ipset_enable: ${IPSET_ENABLE}"
+        echo "egf: ${EGF}"
+        echo
+    } > "$report_file"
+
+    case "$FIREWALL_BACKEND" in
+        iptables) _render_iptables_dry_run "$list_file" "$report_file" ;;
+        nft) _render_nft_dry_run "$list_file" "$report_file" ;;
+        pf) _render_pf_dry_run "$list_file" "$report_file" ;;
+    esac
+
+    printf '%s\n' "$report_file"
+}
+
 _detect_firewall_backend() {
     if [ "$FIREWALL_BACKEND" != "auto" ]; then
         return 0
@@ -217,6 +469,16 @@ _detect_firewall_backend() {
     fi
 
     FIREWALL_BACKEND="iptables"
+}
+
+_ensure_tmp_dir() {
+    if [ ! -d "$TMP_DIR" ]; then
+        mkdir -p "$TMP_DIR"
+    fi
+
+    if [ ! -w "$TMP_DIR" ]; then
+        TMP_DIR="$(mktemp -d /tmp/autosecure.XXXXXX)"
+    fi
 }
 
 _validate_settings() {
@@ -571,6 +833,17 @@ main() {
                 QUIET=1
                 shift
                 ;;
+            -n|--dry-run)
+                DRY_RUN=1
+                shift
+                ;;
+            -o|--dry-run-output)
+                if [ "$#" -lt 2 ]; then
+                    _die "--dry-run-output requires a file path"
+                fi
+                DRY_RUN_OUTPUT="$2"
+                shift 2
+                ;;
             -h|--help)
                 _print_help
                 exit 0
@@ -585,7 +858,7 @@ main() {
         esac
     done
 
-    if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    if [ "${EUID:-$(id -u)}" -ne 0 ] && [ "$DRY_RUN" -ne 1 ]; then
         _die "This script must run as root."
     fi
 
@@ -599,32 +872,58 @@ main() {
     _require_cmd grep
     _require_cmd sort
     _require_cmd mkdir
+    _require_cmd date
 
     _detect_firewall_backend
 
     case "$FIREWALL_BACKEND" in
         iptables)
-            _require_cmd iptables
-            IPTABLES_BIN="$(command -v iptables)"
+            if command -v iptables >/dev/null 2>&1; then
+                IPTABLES_BIN="$(command -v iptables)"
+            elif [ "$DRY_RUN" -eq 1 ]; then
+                IPTABLES_BIN="iptables"
+            else
+                _die "Required command not found: iptables"
+            fi
             if [ "$IPV6_ENABLE" -eq 1 ]; then
-                _require_cmd ip6tables
-                IP6TABLES_BIN="$(command -v ip6tables)"
+                if command -v ip6tables >/dev/null 2>&1; then
+                    IP6TABLES_BIN="$(command -v ip6tables)"
+                elif [ "$DRY_RUN" -eq 1 ]; then
+                    IP6TABLES_BIN="ip6tables"
+                else
+                    _die "Required command not found: ip6tables"
+                fi
             fi
             if [ "$IPSET_ENABLE" -eq 1 ]; then
-                _require_cmd ipset
-                IPSET_BIN="$(command -v ipset)"
+                if command -v ipset >/dev/null 2>&1; then
+                    IPSET_BIN="$(command -v ipset)"
+                elif [ "$DRY_RUN" -eq 1 ]; then
+                    IPSET_BIN="ipset"
+                else
+                    _die "Required command not found: ipset"
+                fi
             fi
             ;;
         nft)
-            _require_cmd nft
-            NFT_BIN="$(command -v nft)"
+            if command -v nft >/dev/null 2>&1; then
+                NFT_BIN="$(command -v nft)"
+            elif [ "$DRY_RUN" -eq 1 ]; then
+                NFT_BIN="nft"
+            else
+                _die "Required command not found: nft"
+            fi
             if [ "$IPSET_ENABLE" -eq 1 ]; then
                 _log "IPSET_ENABLE ignored for nft backend."
             fi
             ;;
         pf)
-            _require_cmd pfctl
-            PFCTL_BIN="$(command -v pfctl)"
+            if command -v pfctl >/dev/null 2>&1; then
+                PFCTL_BIN="$(command -v pfctl)"
+            elif [ "$DRY_RUN" -eq 1 ]; then
+                PFCTL_BIN="pfctl"
+            else
+                _die "Required command not found: pfctl"
+            fi
             if [ "$IPV6_ENABLE" -eq 0 ]; then
                 _log "pf backend handles both IPv4/IPv6 tables. IPV6_ENABLE ignored."
             fi
@@ -640,10 +939,14 @@ main() {
             ;;
     esac
 
-    mkdir -p "$TMP_DIR" "$STATE_DIR"
+    _ensure_tmp_dir
+    if [ "$DRY_RUN" -ne 1 ]; then
+        mkdir -p "$STATE_DIR"
+    fi
 
     local staged_list="${TMP_DIR}/blocked_ips.new"
     local active_list="$staged_list"
+    local dry_run_report=""
 
     _collect_feed_data "$staged_list"
 
@@ -655,8 +958,20 @@ main() {
             _die "No valid feed data and no cache available. Existing firewall rules left unchanged."
         fi
     else
-        cp "$staged_list" "$CACHE_FILE"
-        _log "Cached latest blocklist to ${CACHE_FILE}."
+        if [ "$DRY_RUN" -ne 1 ]; then
+            cp "$staged_list" "$CACHE_FILE"
+            _log "Cached latest blocklist to ${CACHE_FILE}."
+        else
+            _log "Dry-run mode enabled; cache update skipped."
+        fi
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        dry_run_report="$(_write_dry_run_report "$active_list")"
+        _log "Dry-run report written to ${dry_run_report}"
+        _log "No firewall changes were applied."
+        _log "Completed using backend: ${FIREWALL_BACKEND} (dry-run)."
+        exit 0
     fi
 
     case "$FIREWALL_BACKEND" in

@@ -89,4 +89,46 @@ extra_feeds="$(_parse_extra_feeds)"
 extra_expected=$'https://one.test/list.txt\nhttps://two.test/list.txt'
 assert_eq "$extra_expected" "$extra_feeds" "extra feeds parsing"
 
+help_output="$(_print_help)"
+if printf '%s' "$help_output" | grep -q -- "--dry-run"; then
+  printf 'PASS: help contains dry-run option\n'
+else
+  printf 'FAIL: help contains dry-run option\n'
+  exit 1
+fi
+
+cat > "$tmpdir/dryrun_list.txt" <<'DATA'
+1.2.3.4
+2001:db8::1/64
+DATA
+
+TMP_DIR="$tmpdir"
+DRY_RUN_OUTPUT="$tmpdir/dryrun_report.txt"
+FIREWALL_BACKEND="iptables"
+IPV6_ENABLE=1
+IPSET_ENABLE=0
+IPTABLES_BIN="iptables"
+IP6TABLES_BIN="ip6tables"
+IPSET_BIN="ipset"
+XTABLES_WAIT=5
+RULE_POSITION="append"
+EGF=1
+
+dryrun_report="$(_write_dry_run_report "$tmpdir/dryrun_list.txt")"
+assert_eq "$tmpdir/dryrun_report.txt" "$dryrun_report" "dry-run report path"
+
+if grep -q "AUTOSECURE DRY RUN" "$dryrun_report"; then
+  printf 'PASS: dry-run report header\n'
+else
+  printf 'FAIL: dry-run report header\n'
+  exit 1
+fi
+
+if grep -q "iptables -w 5 -A Autosecure -s 1.2.3.4 -j AutosecureAct" "$dryrun_report"; then
+  printf 'PASS: dry-run includes iptables rule preview\n'
+else
+  printf 'FAIL: dry-run includes iptables rule preview\n'
+  exit 1
+fi
+
 printf 'All tests passed.\n'

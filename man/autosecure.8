@@ -3,7 +3,7 @@
 autosecure \- apply threat-feed IP block rules to local firewall backends
 .SH SYNOPSIS
 .B autosecure.sh
-[\-q] [\-\-help] [\-\-version]
+[\-q] [\-\-dry-run] [\-\-dry-run-output file] [\-\-help] [\-\-version]
 .SH DESCRIPTION
 .B autosecure.sh
 downloads threat-feed blocklists, validates and normalizes CIDRs, then applies
@@ -17,6 +17,15 @@ It supports cached fallback behavior when fresh downloads fail.
 .TP
 .B \-q
 Quiet mode (cron-friendly logging).
+.TP
+.B \-n, \-\-dry-run
+Generate a dry-run preview report only; do not apply firewall changes.
+If no output file is specified, a timestamped report is written under
+.B /tmp/autosecure
+.
+.TP
+.B \-o, \-\-dry-run-output
+Write dry-run output to the given file path.
 .TP
 .B \-h, \-\-help
 Print usage help and exit.
@@ -84,6 +93,9 @@ Default log file (when not in quiet mode).
 .TP
 .B /etc/pf.anchors/autosecure
 Managed pf anchor file (macOS pf backend).
+.TP
+.B /tmp/autosecure/autosecure-dryrun-*.txt
+Default dry-run report location.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -101,6 +113,12 @@ Quiet mode:
 .TP
 Force nft backend:
 .B sudo AUTOSECURE_FIREWALL_BACKEND=nft autosecure.sh \-q
+.TP
+Dry-run preview with automatic timestamp:
+.B sudo autosecure.sh \-\-dry-run
+.TP
+Dry-run preview with explicit file:
+.B sudo autosecure.sh \-\-dry-run \-\-dry-run-output /tmp/autosecure-rules.txt
 .SH SEE ALSO
 .BR iptables (8),
 .BR nft (8),
