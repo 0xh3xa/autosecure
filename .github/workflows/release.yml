@@ -90,6 +90,11 @@ jobs:
             sha256sum autosecure-*.tar.gz autosecure_*.deb autosecure-*.rpm > sha256sums.txt
           )
 
+      - name: Generate changelog artifact
+        run: |
+          set -euo pipefail
+          bash scripts/generate-changelog.sh > dist/CHANGELOG.md
+
       - name: Sign checksums (keyless)
         run: |
           set -euo pipefail
@@ -136,62 +141,7 @@ jobs:
           if [ -n "${DRAFTER_BODY}" ] && ! printf '%s' "${DRAFTER_BODY}" | grep -qi '^.*No changes.*$'; then
             printf '%s\n' "${DRAFTER_BODY}" > "${NOTES_FILE}"
           else
-            PREV_TAG="$(git tag --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -n 1 || true)"
-            if [ -n "${PREV_TAG}" ]; then
-              RANGE="${PREV_TAG}..${CURRENT_TAG}"
-            else
-              RANGE="${CURRENT_TAG}"
-            fi
-
-            COMMITS="$(git log --pretty=format:'%h%x09%s' "${RANGE}")"
-
-            {
-              echo "## What's Changed"
-              echo
-            } > "${NOTES_FILE}"
-
-            add_section() {
-              local title="$1"
-              local pattern="$2"
-              local matches
-              matches="$(printf '%s\n' "${COMMITS}" | grep -E "${pattern}" || true)"
-              [ -n "${matches}" ] || return 0
-              {
-                echo "### ${title}"
-                while IFS=$'\t' read -r sha subject; do
-                  [ -n "${sha}" ] || continue
-                  echo "- ${subject} (\`${sha}\`)"
-                done <<< "${matches}"
-                echo
-              } >> "${NOTES_FILE}"
-            }
-
-            add_section "Features" '^([[:space:]]*)?feat(\([^)]+\))?:'
-            add_section "Fixes" '^([[:space:]]*)?fix(\([^)]+\))?:'
-            add_section "Performance" '^([[:space:]]*)?perf(\([^)]+\))?:'
-            add_section "Refactors" '^([[:space:]]*)?refactor(\([^)]+\))?:'
-            add_section "Documentation" '^([[:space:]]*)?docs(\([^)]+\))?:'
-            add_section "Build & CI" '^([[:space:]]*)?(build|ci)(\([^)]+\))?:'
-            add_section "Tests" '^([[:space:]]*)?test(\([^)]+\))?:'
-            add_section "Chores" '^([[:space:]]*)?chore(\([^)]+\))?:'
-
-            OTHER="$(printf '%s\n' "${COMMITS}" | grep -Ev '^([[:space:]]*)?(feat|fix|perf|refactor|docs|build|ci|test|chore)(\([^)]+\))?:' || true)"
-            if [ -n "${OTHER}" ]; then
-              {
-                echo "### Other Changes"
-                while IFS=$'\t' read -r sha subject; do
-                  [ -n "${sha}" ] || continue
-                  echo "- ${subject} (\`${sha}\`)"
-                done <<< "${OTHER}"
-                echo
-              } >> "${NOTES_FILE}"
-            fi
-
-            if [ -n "${PREV_TAG}" ]; then
-              echo "Full Changelog: ${REPO_URL}/compare/${PREV_TAG}...${CURRENT_TAG}" >> "${NOTES_FILE}"
-            else
-              echo "Full Changelog: ${REPO_URL}/tree/${CURRENT_TAG}" >> "${NOTES_FILE}"
-            fi
+            REPO_URL="${REPO_URL}" bash scripts/generate-release-notes.sh "${CURRENT_TAG}" "${NOTES_FILE}"
           fi
 
       - name: Create GitHub Release
@@ -205,3 +155,4 @@ jobs:
             dist/sha256sums.txt
             dist/sha256sums.txt.sig
             dist/sha256sums.txt.pem
+            dist/CHANGELOG.md
