@@ -120,10 +120,83 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare release notes
+        env:
+          DRAFTER_BODY: ${{ steps.drafter.outputs.body }}
+        run: |
+          set -euo pipefail
+          DIST_DIR="dist"
+          NOTES_FILE="${DIST_DIR}/release-notes.md"
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+
+          mkdir -p "${DIST_DIR}"
+
+          if [ -n "${DRAFTER_BODY}" ] && ! printf '%s' "${DRAFTER_BODY}" | grep -qi '^.*No changes.*$'; then
+            printf '%s\n' "${DRAFTER_BODY}" > "${NOTES_FILE}"
+          else
+            PREV_TAG="$(git tag --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -n 1 || true)"
+            if [ -n "${PREV_TAG}" ]; then
+              RANGE="${PREV_TAG}..${CURRENT_TAG}"
+            else
+              RANGE="${CURRENT_TAG}"
+            fi
+
+            COMMITS="$(git log --pretty=format:'%h%x09%s' "${RANGE}")"
+
+            {
+              echo "## What's Changed"
+              echo
+            } > "${NOTES_FILE}"
+
+            add_section() {
+              local title="$1"
+              local pattern="$2"
+              local matches
+              matches="$(printf '%s\n' "${COMMITS}" | grep -E "${pattern}" || true)"
+              [ -n "${matches}" ] || return 0
+              {
+                echo "### ${title}"
+                while IFS=$'\t' read -r sha subject; do
+                  [ -n "${sha}" ] || continue
+                  echo "- ${subject} (\`${sha}\`)"
+                done <<< "${matches}"
+                echo
+              } >> "${NOTES_FILE}"
+            }
+
+            add_section "Features" '^([[:space:]]*)?feat(\([^)]+\))?:'
+            add_section "Fixes" '^([[:space:]]*)?fix(\([^)]+\))?:'
+            add_section "Performance" '^([[:space:]]*)?perf(\([^)]+\))?:'
+            add_section "Refactors" '^([[:space:]]*)?refactor(\([^)]+\))?:'
+            add_section "Documentation" '^([[:space:]]*)?docs(\([^)]+\))?:'
+            add_section "Build & CI" '^([[:space:]]*)?(build|ci)(\([^)]+\))?:'
+            add_section "Tests" '^([[:space:]]*)?test(\([^)]+\))?:'
+            add_section "Chores" '^([[:space:]]*)?chore(\([^)]+\))?:'
+
+            OTHER="$(printf '%s\n' "${COMMITS}" | grep -Ev '^([[:space:]]*)?(feat|fix|perf|refactor|docs|build|ci|test|chore)(\([^)]+\))?:' || true)"
+            if [ -n "${OTHER}" ]; then
+              {
+                echo "### Other Changes"
+                while IFS=$'\t' read -r sha subject; do
+                  [ -n "${sha}" ] || continue
+                  echo "- ${subject} (\`${sha}\`)"
+                done <<< "${OTHER}"
+                echo
+              } >> "${NOTES_FILE}"
+            fi
+
+            if [ -n "${PREV_TAG}" ]; then
+              echo "Full Changelog: ${REPO_URL}/compare/${PREV_TAG}...${CURRENT_TAG}" >> "${NOTES_FILE}"
+            else
+              echo "Full Changelog: ${REPO_URL}/tree/${CURRENT_TAG}" >> "${NOTES_FILE}"
+            fi
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ steps.drafter.outputs.body }}
+          body_path: dist/release-notes.md
           files: |
             dist/autosecure-*.tar.gz
             dist/autosecure_*.deb
