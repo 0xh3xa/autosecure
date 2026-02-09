@@ -18,6 +18,11 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
+      - name: Install nfpm
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Validate
         run: |
           bash -n autosecure.sh
@@ -28,19 +33,46 @@ jobs:
       - name: Build release artifacts
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${GITHUB_REF_NAME#v}"
           DIST_DIR="dist"
-          PKG_DIR="autosecure-${VERSION}"
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          PKG_DIR="autosecure-${RELEASE_TAG}"
+          DEB_ARCH="$(dpkg --print-architecture)"
+          RPM_ARCH="$(uname -m)"
+
+          case "$RPM_ARCH" in
+            x86_64|aarch64) ;;
+            amd64) RPM_ARCH="x86_64" ;;
+            arm64) RPM_ARCH="aarch64" ;;
+            *)
+              echo "Unsupported RPM arch: $RPM_ARCH"
+              exit 1
+              ;;
+          esac
 
           mkdir -p "${DIST_DIR}/${PKG_DIR}"
           cp autosecure.sh README.md LICENSE.md "${DIST_DIR}/${PKG_DIR}/"
 
-          TAR_NAME="autosecure-${VERSION}.tar.gz"
+          TAR_NAME="autosecure-${RELEASE_TAG}.tar.gz"
           tar -czf "${DIST_DIR}/${TAR_NAME}" -C "${DIST_DIR}" "${PKG_DIR}"
+
+          sed -e "s/__VERSION__/${VERSION}/g" \
+              -e "s/__ARCH_RPM__/${RPM_ARCH}/g" \
+              packaging/nfpm.yaml > "${DIST_DIR}/nfpm.yaml"
+
+          nfpm package \
+            --config "${DIST_DIR}/nfpm.yaml" \
+            --packager deb \
+            --target "${DIST_DIR}/autosecure_${VERSION}_${DEB_ARCH}.deb"
+
+          nfpm package \
+            --config "${DIST_DIR}/nfpm.yaml" \
+            --packager rpm \
+            --target "${DIST_DIR}/autosecure-${VERSION}-1.${RPM_ARCH}.rpm"
 
           (
             cd "${DIST_DIR}"
-            sha256sum "${TAR_NAME}" > sha256sums.txt
+            sha256sum autosecure-*.tar.gz autosecure_*.deb autosecure-*.rpm > sha256sums.txt
           )
 
       - name: Create GitHub Release
@@ -49,4 +81,6 @@ jobs:
           generate_release_notes: true
           files: |
             dist/autosecure-*.tar.gz
+            dist/autosecure_*.deb
+            dist/autosecure-*.rpm
             dist/sha256sums.txt
