@@ -108,6 +108,20 @@ Environment variables:
 - `AUTOSECURE_EXTRA_FEEDS=<url1,url2,...>`
 - `AUTOSECURE_EGF=0|1` (default: `1`)
 
+## Help and Manual
+
+```bash
+autosecure.sh --help
+autosecure.sh --version
+man autosecure
+```
+
+If you installed from source and `man autosecure` is missing:
+
+```bash
+sudo make install-man
+```
+
 ## Feed Sources
 
 - `https://www.spamhaus.org/drop/drop.txt`

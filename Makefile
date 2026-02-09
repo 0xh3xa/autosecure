@@ -1,4 +1,4 @@
-.PHONY: validate test test-urls test-urls-offline precommit changelog release-notes pf-bootstrap
+.PHONY: validate test test-urls test-urls-offline precommit changelog release-notes pf-bootstrap install-man
 
 TAG ?=
 
@@ -41,3 +41,8 @@ pf-bootstrap:
 	sudo pfctl -f /etc/pf.conf
 	sudo pfctl -e
 	@echo "pf anchor configured and loaded."
+
+install-man:
+	install -d /usr/local/share/man/man8
+	install -m 0644 man/autosecure.8 /usr/local/share/man/man8/autosecure.8
+	@echo "Installed man page to /usr/local/share/man/man8/autosecure.8"

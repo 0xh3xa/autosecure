@@ -1,0 +1,107 @@
+.TH AUTOSECURE 8 "February 2026" "autosecure" "System Administration"
+.SH NAME
+autosecure \- apply threat-feed IP block rules to local firewall backends
+.SH SYNOPSIS
+.B autosecure.sh
+[\-q] [\-\-help] [\-\-version]
+.SH DESCRIPTION
+.B autosecure.sh
+downloads threat-feed blocklists, validates and normalizes CIDRs, then applies
+blocking rules to one backend:
+.BR iptables ,
+.BR nft ,
+or
+.BR pf .
+It supports cached fallback behavior when fresh downloads fail.
+.SH OPTIONS
+.TP
+.B \-q
+Quiet mode (cron-friendly logging).
+.TP
+.B \-h, \-\-help
+Print usage help and exit.
+.TP
+.B \-V, \-\-version
+Print version and exit.
+.SH ENVIRONMENT
+.TP
+.B AUTOSECURE_FIREWALL_BACKEND
+Backend selection:
+.BR auto ,
+.BR iptables ,
+.BR nft ,
+or
+.BR pf .
+Default:
+.BR auto .
+.TP
+.B AUTOSECURE_RULE_POSITION
+iptables rule insertion strategy:
+.BR append
+or
+.BR top .
+Default:
+.BR append .
+.TP
+.B AUTOSECURE_XTABLES_WAIT
+Seconds to wait for xtables lock.
+Default:
+.BR 5 .
+.TP
+.B AUTOSECURE_IPV6_ENABLE
+Enable IPv6 rule handling for iptables mode:
+.BR 0
+or
+.BR 1 .
+Default:
+.BR 0 .
+.TP
+.B AUTOSECURE_IPSET_ENABLE
+Enable ipset acceleration for iptables mode:
+.BR 0
+or
+.BR 1 .
+Default:
+.BR 0 .
+.TP
+.B AUTOSECURE_EXTRA_FEEDS
+Comma-separated additional feed URLs to append.
+.TP
+.B AUTOSECURE_EGF
+Enable outbound filtering:
+.BR 0
+or
+.BR 1 .
+Default:
+.BR 1 .
+.SH FILES
+.TP
+.B /var/lib/autosecure/blocked_ips.txt
+Cached blocklist fallback file.
+.TP
+.B /var/log/autosecure.log
+Default log file (when not in quiet mode).
+.TP
+.B /etc/pf.anchors/autosecure
+Managed pf anchor file (macOS pf backend).
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B non-zero
+Failure (invalid options, missing dependencies, backend/apply errors).
+.SH EXAMPLES
+.TP
+Run normally:
+.B sudo autosecure.sh
+.TP
+Quiet mode:
+.B sudo autosecure.sh \-q
+.TP
+Force nft backend:
+.B sudo AUTOSECURE_FIREWALL_BACKEND=nft autosecure.sh \-q
+.SH SEE ALSO
+.BR iptables (8),
+.BR nft (8),
+.BR pfctl (8)

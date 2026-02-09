@@ -19,6 +19,8 @@ contents:
     dst: /usr/share/doc/autosecure/README.md
   - src: ./LICENSE.md
     dst: /usr/share/doc/autosecure/LICENSE.md
+  - src: ./man/autosecure.8
+    dst: /usr/share/man/man8/autosecure.8
 depends:
   - bash
   - iptables

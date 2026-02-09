@@ -15,6 +15,7 @@ TMP_DIR="/tmp/autosecure"
 STATE_DIR="/var/lib/autosecure"
 CACHE_FILE="${STATE_DIR}/blocked_ips.txt"
 DOWNLOADER=""
+AUTOSECURE_VERSION="${AUTOSECURE_VERSION:-dev}"
 
 # Firewall backend: auto|iptables|nft|pf
 AUTOSECURE_FIREWALL_BACKEND="${AUTOSECURE_FIREWALL_BACKEND:-${FIREWALL_BACKEND:-auto}}"
@@ -52,6 +53,30 @@ PF_ANCHOR_FILE="/etc/pf.anchors/${PF_ANCHOR}"
 # Additional feeds (comma-separated)
 # Example: AUTOSECURE_EXTRA_FEEDS="https://example.com/feed1.txt,https://example.com/feed2.txt"
 AUTOSECURE_EXTRA_FEEDS="${AUTOSECURE_EXTRA_FEEDS:-${EXTRA_FEEDS:-}}"
+
+_print_help() {
+    cat <<'EOF'
+Usage: autosecure.sh [options]
+
+Options:
+  -q              Quiet mode (cron-friendly).
+  -h, --help      Show this help message and exit.
+  -V, --version   Show version and exit.
+
+Environment:
+  AUTOSECURE_FIREWALL_BACKEND=auto|iptables|nft|pf
+  AUTOSECURE_RULE_POSITION=append|top
+  AUTOSECURE_XTABLES_WAIT=<seconds>
+  AUTOSECURE_IPV6_ENABLE=0|1
+  AUTOSECURE_IPSET_ENABLE=0|1
+  AUTOSECURE_EXTRA_FEEDS=<url1,url2,...>
+  AUTOSECURE_EGF=0|1
+EOF
+}
+
+_print_version() {
+    printf 'autosecure %s\n' "$AUTOSECURE_VERSION"
+}
 
 _log() {
     if [ "$QUIET" -eq 0 ]; then
@@ -507,10 +532,25 @@ PFEOF
 }
 
 main() {
-    if [ "${1:-}" = "-q" ]; then
-        QUIET=1
-        shift
-    fi
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -q)
+                QUIET=1
+                shift
+                ;;
+            -h|--help)
+                _print_help
+                exit 0
+                ;;
+            -V|--version)
+                _print_version
+                exit 0
+                ;;
+            *)
+                _die "Unknown option: $1 (use --help)"
+                ;;
+        esac
+    done
 
     if [ "${EUID:-$(id -u)}" -ne 0 ]; then
         _die "This script must run as root."
