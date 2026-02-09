@@ -452,24 +452,29 @@ _apply_with_nft() {
 _pf_bootstrap_anchor() {
     local anchor_line="anchor \"${PF_ANCHOR}\""
     local load_line="load anchor \"${PF_ANCHOR}\" from \"${PF_ANCHOR_FILE}\""
+    local changed=0
 
     touch "$PF_ANCHOR_FILE"
 
     if ! grep -qF "$anchor_line" /etc/pf.conf; then
         printf '%s\n' "$anchor_line" >> /etc/pf.conf
         _log "[pf] Added anchor line to /etc/pf.conf."
+        changed=1
     fi
 
     if ! grep -qF "$load_line" /etc/pf.conf; then
         printf '%s\n' "$load_line" >> /etc/pf.conf
         _log "[pf] Added load anchor line to /etc/pf.conf."
+        changed=1
     fi
 
-    if ! "$PFCTL_BIN" -nf /etc/pf.conf >/dev/null 2>&1; then
-        _die "Failed to validate /etc/pf.conf after pf bootstrap."
-    fi
+    if [ "$changed" -eq 1 ]; then
+        if ! "$PFCTL_BIN" -nf /etc/pf.conf >/dev/null 2>&1; then
+            _die "Failed to validate /etc/pf.conf after pf bootstrap."
+        fi
 
-    "$PFCTL_BIN" -f /etc/pf.conf >/dev/null 2>&1
+        "$PFCTL_BIN" -q -f /etc/pf.conf >/dev/null 2>&1
+    fi
 }
 
 _apply_with_pf() {
@@ -494,9 +499,9 @@ block out quick from any to <autosecure_bad_hosts>
 PFEOF
     fi
 
-    "$PFCTL_BIN" -a "$PF_ANCHOR" -f "$PF_ANCHOR_FILE"
-    "$PFCTL_BIN" -a "$PF_ANCHOR" -t autosecure_bad_hosts -T replace -f "$list_file"
-    "$PFCTL_BIN" -e >/dev/null 2>&1 || true
+    "$PFCTL_BIN" -q -a "$PF_ANCHOR" -f "$PF_ANCHOR_FILE"
+    "$PFCTL_BIN" -q -a "$PF_ANCHOR" -t autosecure_bad_hosts -T replace -f "$list_file"
+    "$PFCTL_BIN" -q -e >/dev/null 2>&1 || true
 
     _log "[pf] Applied anchor '${PF_ANCHOR}'."
 }
