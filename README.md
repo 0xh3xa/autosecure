@@ -112,7 +112,7 @@ On macOS, the backend `auto` (out of the box setup) selects `pf`, then:
 
 ### Scheduled Updates via Cron
 
-<details open>
+<details>
 <summary>Linux (APT/RPM/package install)</summary>
 
 Use the packaged binary path:
@@ -152,17 +152,17 @@ crontab -e
 0 3 * * * /absolute/path/to/autosecure.sh -q
 ```
 
-</details>
-
-Tip:
+Resolve the executable path first:
 
 ```bash
 command -v autosecure || command -v autosecure.sh
 ```
 
+</details>
+
 ## Troubleshooting
 
-<details open>
+<details>
 <summary>iptables (IPv4)</summary>
 
 Flush chains:
@@ -252,6 +252,7 @@ sudo pfctl -nf /etc/pf.conf
 ```
 
 </details>
+
 ## Contributing
 
 Open an issue for bugs or a pull request for improvements.
