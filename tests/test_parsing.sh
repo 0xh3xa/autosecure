@@ -84,4 +84,9 @@ assert_eq "AutosecureV4" "$ipset_v4_name" "ipset v4 name"
 ipset_v6_name="$(_ipset_set_name v6)"
 assert_eq "AutosecureV6" "$ipset_v6_name" "ipset v6 name"
 
+AUTOSECURE_EXTRA_FEEDS="https://one.test/list.txt,https://two.test/list.txt"
+extra_feeds="$(_parse_extra_feeds)"
+extra_expected=$'https://one.test/list.txt\nhttps://two.test/list.txt'
+assert_eq "$extra_expected" "$extra_feeds" "extra feeds parsing"
+
 printf 'All tests passed.\n'

@@ -8,10 +8,6 @@ set -euo pipefail
 # Copyright (C) 2014 Volkan @volkan-k
 # Copyright (C) 2016 Anasxrt @Anasxrt
 
-# based off the following two scripts
-# http://www.theunsupported.com/2012/07/block-malicious-ip-addresses/
-# http://www.cyberciti.biz/tips/block-spamming-scanning-with-iptables.html
-
 # Runtime defaults
 QUIET=0
 LOG_FILE="/var/log/autosecure.log"
@@ -19,25 +15,44 @@ TMP_DIR="/tmp/autosecure"
 STATE_DIR="/var/lib/autosecure"
 CACHE_FILE="${STATE_DIR}/blocked_ips.txt"
 DOWNLOADER=""
+
+# Firewall backend: auto|iptables|nft|pf
+AUTOSECURE_FIREWALL_BACKEND="${AUTOSECURE_FIREWALL_BACKEND:-${FIREWALL_BACKEND:-auto}}"
+FIREWALL_BACKEND="$AUTOSECURE_FIREWALL_BACKEND"
+
+# iptables settings
 IPTABLES_BIN=""
 IP6TABLES_BIN=""
 IPSET_BIN=""
 XTABLES_WAIT="${XTABLES_WAIT:-5}"
-RULE_POSITION="${RULE_POSITION:-append}"
-IPV6_ENABLE="${IPV6_ENABLE:-0}"
-IPSET_ENABLE="${IPSET_ENABLE:-0}"
-
-# Outbound (egress) filtering is optional.
-EGF="${EGF:-1}"
-
-# iptables custom chain for Bad IPs
+AUTOSECURE_XTABLES_WAIT="${AUTOSECURE_XTABLES_WAIT:-${XTABLES_WAIT:-5}}"
+XTABLES_WAIT="$AUTOSECURE_XTABLES_WAIT"
+AUTOSECURE_RULE_POSITION="${AUTOSECURE_RULE_POSITION:-${RULE_POSITION:-append}}"
+RULE_POSITION="$AUTOSECURE_RULE_POSITION"
+AUTOSECURE_IPV6_ENABLE="${AUTOSECURE_IPV6_ENABLE:-${IPV6_ENABLE:-0}}"
+IPV6_ENABLE="$AUTOSECURE_IPV6_ENABLE"
+AUTOSECURE_IPSET_ENABLE="${AUTOSECURE_IPSET_ENABLE:-${IPSET_ENABLE:-0}}"
+IPSET_ENABLE="$AUTOSECURE_IPSET_ENABLE"
+AUTOSECURE_EGF="${AUTOSECURE_EGF:-${EGF:-1}}"
+EGF="$AUTOSECURE_EGF"
 CHAIN="Autosecure"
-# iptables custom chain for actions
 CHAINACT="AutosecureAct"
 IPSET_V4_NAME="AutosecureV4"
 IPSET_V6_NAME="AutosecureV6"
 
-# logger from @phracker
+# nftables settings
+NFT_BIN=""
+NFT_TABLE="${NFT_TABLE:-autosecure}"
+
+# pf (macOS) settings
+PFCTL_BIN=""
+PF_ANCHOR="${PF_ANCHOR:-autosecure}"
+PF_ANCHOR_FILE="/etc/pf.anchors/${PF_ANCHOR}"
+
+# Additional feeds (comma-separated)
+# Example: AUTOSECURE_EXTRA_FEEDS="https://example.com/feed1.txt,https://example.com/feed2.txt"
+AUTOSECURE_EXTRA_FEEDS="${AUTOSECURE_EXTRA_FEEDS:-${EXTRA_FEEDS:-}}"
+
 _log() {
     if [ "$QUIET" -eq 0 ]; then
         printf "%s: %s\n" "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$*" | tee -a "$LOG_FILE"
@@ -88,6 +103,7 @@ _parse_static_blocklist_file() {
 
 _is_valid_ip_or_cidr() {
     local ip="$1"
+
     if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[1-2][0-9]|3[0-2]))?$ ]]; then
         return 0
     fi
@@ -110,21 +126,6 @@ _ip_matches_family() {
     fi
 }
 
-_fw_cmd() {
-    local family="$1"
-    shift
-
-    if [ "$family" = "v4" ]; then
-        "$IPTABLES_BIN" -w "$XTABLES_WAIT" "$@"
-    else
-        "$IP6TABLES_BIN" -w "$XTABLES_WAIT" "$@"
-    fi
-}
-
-_ipset_cmd() {
-    "$IPSET_BIN" "$@"
-}
-
 _ipset_set_name() {
     local family="$1"
     if [ "$family" = "v4" ]; then
@@ -134,123 +135,66 @@ _ipset_set_name() {
     fi
 }
 
-_ensure_chain() {
-    local family="$1"
-    local chain="$2"
-
-    if _fw_cmd "$family" -L "$chain" -n >/dev/null 2>&1; then
-        _fw_cmd "$family" -F "$chain" >/dev/null 2>&1
-    else
-        _fw_cmd "$family" -N "$chain" >/dev/null 2>&1
+_parse_extra_feeds() {
+    if [ -z "$AUTOSECURE_EXTRA_FEEDS" ]; then
+        return 0
     fi
+
+    printf '%s\n' "$AUTOSECURE_EXTRA_FEEDS" | tr ',' '\n' | awk 'NF > 0 { print $0 }'
 }
 
-_ensure_jump() {
-    local family="$1"
-    local from_chain="$2"
-    local to_chain="$3"
-
-    if ! _fw_cmd "$family" -C "$from_chain" -j "$to_chain" >/dev/null 2>&1; then
-        if [ "$RULE_POSITION" = "top" ]; then
-            _fw_cmd "$family" -I "$from_chain" -j "$to_chain" >/dev/null 2>&1
-        else
-            _fw_cmd "$family" -A "$from_chain" -j "$to_chain" >/dev/null 2>&1
-        fi
+_detect_firewall_backend() {
+    if [ "$FIREWALL_BACKEND" != "auto" ]; then
+        return 0
     fi
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        FIREWALL_BACKEND="pf"
+        return 0
+    fi
+
+    if command -v nft >/dev/null 2>&1; then
+        FIREWALL_BACKEND="nft"
+        return 0
+    fi
+
+    FIREWALL_BACKEND="iptables"
 }
 
-_add_block_rules() {
-    local family="$1"
-    local ip="$2"
+_validate_settings() {
+    case "$RULE_POSITION" in
+        append|top) ;;
+        *) _die "RULE_POSITION must be 'append' or 'top' (got: ${RULE_POSITION})" ;;
+    esac
 
-    _fw_cmd "$family" -A "$CHAIN" -s "$ip" -j "$CHAINACT"
+    case "$IPV6_ENABLE" in
+        0|1) ;;
+        *) _die "IPV6_ENABLE must be 0 or 1 (got: ${IPV6_ENABLE})" ;;
+    esac
 
-    if [ "$EGF" -ne 0 ]; then
-        _fw_cmd "$family" -A "$CHAIN" -d "$ip" -j "$CHAINACT"
+    case "$IPSET_ENABLE" in
+        0|1) ;;
+        *) _die "IPSET_ENABLE must be 0 or 1 (got: ${IPSET_ENABLE})" ;;
+    esac
+
+    case "$EGF" in
+        0|1) ;;
+        *) _die "EGF must be 0 or 1 (got: ${EGF})" ;;
+    esac
+
+    case "$FIREWALL_BACKEND" in
+        auto|iptables|nft|pf) ;;
+        *) _die "FIREWALL_BACKEND must be auto|iptables|nft|pf (got: ${FIREWALL_BACKEND})" ;;
+    esac
+
+    if ! [[ "$XTABLES_WAIT" =~ ^[0-9]+$ ]]; then
+        _die "XTABLES_WAIT must be an integer (got: ${XTABLES_WAIT})"
     fi
-}
-
-_add_ipset_rules() {
-    local family="$1"
-    local set_name
-    set_name="$(_ipset_set_name "$family")"
-
-    _fw_cmd "$family" -A "$CHAIN" -m set --match-set "$set_name" src -j "$CHAINACT"
-    if [ "$EGF" -ne 0 ]; then
-        _fw_cmd "$family" -A "$CHAIN" -m set --match-set "$set_name" dst -j "$CHAINACT"
-    fi
-}
-
-_prepare_ipset_for_family() {
-    local family="$1"
-    local set_name
-    set_name="$(_ipset_set_name "$family")"
-
-    if [ "$family" = "v4" ]; then
-        _ipset_cmd create "$set_name" hash:net family inet -exist
-    else
-        _ipset_cmd create "$set_name" hash:net family inet6 -exist
-    fi
-    _ipset_cmd flush "$set_name"
-}
-
-_prepare_chains_for_family() {
-    local family="$1"
-
-    if _fw_cmd "$family" -L "$CHAIN" -n >/dev/null 2>&1; then
-        _log "[$family] Flushed old rules. Applying updated Autosecure list..."
-    else
-        _log "[$family] Chain not detected. Creating new chain and adding Autoblock list..."
-    fi
-
-    _ensure_chain "$family" "$CHAIN"
-    _ensure_chain "$family" "$CHAINACT"
-
-    _ensure_jump "$family" INPUT "$CHAIN"
-    _ensure_jump "$family" FORWARD "$CHAIN"
-    if [ "$EGF" -ne 0 ]; then
-        _ensure_jump "$family" OUTPUT "$CHAIN"
-    fi
-
-    _fw_cmd "$family" -A "$CHAINACT" -j LOG --log-prefix "[AUTOSECURE BLOCK] " -m limit --limit 3/min --limit-burst 10 >/dev/null 2>&1
-    _fw_cmd "$family" -A "$CHAINACT" -j DROP >/dev/null 2>&1
-
-    if [ "$IPSET_ENABLE" -eq 1 ]; then
-        _prepare_ipset_for_family "$family"
-        _add_ipset_rules "$family"
-    fi
-}
-
-_apply_list_to_family() {
-    local family="$1"
-    local list_file="$2"
-    local count=0
-
-    _prepare_chains_for_family "$family"
-
-    while IFS= read -r ip; do
-        [ -n "$ip" ] || continue
-        if ! _ip_matches_family "$family" "$ip"; then
-            continue
-        fi
-        if [ "$IPSET_ENABLE" -eq 1 ]; then
-            _ipset_cmd add "$(_ipset_set_name "$family")" "$ip" -exist
-        else
-            _add_block_rules "$family" "$ip"
-        fi
-        count=$((count + 1))
-    done < "$list_file"
-
-    _log "[$family] Applied ${count} block entries."
 }
 
 _collect_feed_data() {
     local output_file="$1"
 
-    # list of known spammers
-    # DShield based on earlier work from:
-    # http://wiki.brokenpoet.org/wiki/Get_DShield_Blocklist
-    # https://github.com/koconder/dshield_automatic_iptables
     local urls=(
         "https://www.spamhaus.org/drop/drop.txt"
         "https://www.spamhaus.org/drop/edrop.txt"
@@ -262,6 +206,11 @@ _collect_feed_data() {
         "${TMP_DIR}/spamhaus_edrop.txt"
         "${TMP_DIR}/dshield_drop.txt"
     )
+
+    while IFS= read -r extra; do
+        urls+=("$extra")
+        files+=("${TMP_DIR}/extra_$(printf '%03d' "${#files[@]}").txt")
+    done < <(_parse_extra_feeds)
 
     : > "$output_file"
 
@@ -283,6 +232,7 @@ _collect_feed_data() {
 
         _log "Parsing hosts in ${file}..."
 
+        # Index 2 is DShield format. All others are treated as static blocklist lines.
         if [ "$idx" -eq 2 ]; then
             while IFS= read -r ip; do
                 [ -n "$ip" ] || continue
@@ -306,29 +256,232 @@ _collect_feed_data() {
     sort -u -o "$output_file" "$output_file"
 }
 
-_validate_settings() {
-    case "$RULE_POSITION" in
-        append|top) ;;
-        *) _die "RULE_POSITION must be 'append' or 'top' (got: ${RULE_POSITION})" ;;
-    esac
+_fw_cmd() {
+    local family="$1"
+    shift
 
-    case "$IPV6_ENABLE" in
-        0|1) ;;
-        *) _die "IPV6_ENABLE must be 0 or 1 (got: ${IPV6_ENABLE})" ;;
-    esac
-    case "$IPSET_ENABLE" in
-        0|1) ;;
-        *) _die "IPSET_ENABLE must be 0 or 1 (got: ${IPSET_ENABLE})" ;;
-    esac
-
-    case "$EGF" in
-        0|1) ;;
-        *) _die "EGF must be 0 or 1 (got: ${EGF})" ;;
-    esac
-
-    if ! [[ "$XTABLES_WAIT" =~ ^[0-9]+$ ]]; then
-        _die "XTABLES_WAIT must be an integer (got: ${XTABLES_WAIT})"
+    if [ "$family" = "v4" ]; then
+        "$IPTABLES_BIN" -w "$XTABLES_WAIT" "$@"
+    else
+        "$IP6TABLES_BIN" -w "$XTABLES_WAIT" "$@"
     fi
+}
+
+_ipset_cmd() {
+    "$IPSET_BIN" "$@"
+}
+
+_iptables_ensure_chain() {
+    local family="$1"
+    local chain="$2"
+
+    if _fw_cmd "$family" -L "$chain" -n >/dev/null 2>&1; then
+        _fw_cmd "$family" -F "$chain" >/dev/null 2>&1
+    else
+        _fw_cmd "$family" -N "$chain" >/dev/null 2>&1
+    fi
+}
+
+_iptables_ensure_jump() {
+    local family="$1"
+    local from_chain="$2"
+    local to_chain="$3"
+
+    if ! _fw_cmd "$family" -C "$from_chain" -j "$to_chain" >/dev/null 2>&1; then
+        if [ "$RULE_POSITION" = "top" ]; then
+            _fw_cmd "$family" -I "$from_chain" -j "$to_chain" >/dev/null 2>&1
+        else
+            _fw_cmd "$family" -A "$from_chain" -j "$to_chain" >/dev/null 2>&1
+        fi
+    fi
+}
+
+_iptables_prepare_ipset() {
+    local family="$1"
+    local set_name
+    set_name="$(_ipset_set_name "$family")"
+
+    if [ "$family" = "v4" ]; then
+        _ipset_cmd create "$set_name" hash:net family inet -exist
+    else
+        _ipset_cmd create "$set_name" hash:net family inet6 -exist
+    fi
+    _ipset_cmd flush "$set_name"
+}
+
+_iptables_prepare_chains() {
+    local family="$1"
+
+    _iptables_ensure_chain "$family" "$CHAIN"
+    _iptables_ensure_chain "$family" "$CHAINACT"
+
+    _iptables_ensure_jump "$family" INPUT "$CHAIN"
+    _iptables_ensure_jump "$family" FORWARD "$CHAIN"
+    if [ "$EGF" -ne 0 ]; then
+        _iptables_ensure_jump "$family" OUTPUT "$CHAIN"
+    fi
+
+    _fw_cmd "$family" -A "$CHAINACT" -j LOG --log-prefix "[AUTOSECURE BLOCK] " -m limit --limit 3/min --limit-burst 10 >/dev/null 2>&1
+    _fw_cmd "$family" -A "$CHAINACT" -j DROP >/dev/null 2>&1
+
+    if [ "$IPSET_ENABLE" -eq 1 ]; then
+        _iptables_prepare_ipset "$family"
+        local set_name
+        set_name="$(_ipset_set_name "$family")"
+        _fw_cmd "$family" -A "$CHAIN" -m set --match-set "$set_name" src -j "$CHAINACT"
+        if [ "$EGF" -ne 0 ]; then
+            _fw_cmd "$family" -A "$CHAIN" -m set --match-set "$set_name" dst -j "$CHAINACT"
+        fi
+    fi
+}
+
+_iptables_apply_list_family() {
+    local family="$1"
+    local list_file="$2"
+    local count=0
+
+    _iptables_prepare_chains "$family"
+
+    while IFS= read -r ip; do
+        [ -n "$ip" ] || continue
+        if ! _ip_matches_family "$family" "$ip"; then
+            continue
+        fi
+
+        if [ "$IPSET_ENABLE" -eq 1 ]; then
+            _ipset_cmd add "$(_ipset_set_name "$family")" "$ip" -exist
+        else
+            _fw_cmd "$family" -A "$CHAIN" -s "$ip" -j "$CHAINACT"
+            if [ "$EGF" -ne 0 ]; then
+                _fw_cmd "$family" -A "$CHAIN" -d "$ip" -j "$CHAINACT"
+            fi
+        fi
+        count=$((count + 1))
+    done < "$list_file"
+
+    _log "[iptables/${family}] Applied ${count} block entries."
+}
+
+_apply_with_iptables() {
+    local list_file="$1"
+
+    _iptables_apply_list_family v4 "$list_file"
+    if [ "$IPV6_ENABLE" -eq 1 ]; then
+        _iptables_apply_list_family v6 "$list_file"
+    fi
+}
+
+_apply_with_nft() {
+    local list_file="$1"
+    local v4_elements=""
+    local v6_elements=""
+    local first_v4=1
+    local first_v6=1
+
+    while IFS= read -r ip; do
+        [ -n "$ip" ] || continue
+        if _ip_matches_family v4 "$ip"; then
+            if [ "$first_v4" -eq 1 ]; then
+                v4_elements="$ip"
+                first_v4=0
+            else
+                v4_elements="${v4_elements}, ${ip}"
+            fi
+        else
+            if [ "$first_v6" -eq 1 ]; then
+                v6_elements="$ip"
+                first_v6=0
+            else
+                v6_elements="${v6_elements}, ${ip}"
+            fi
+        fi
+    done < "$list_file"
+
+    local output_rules="${TMP_DIR}/autosecure.nft"
+
+    {
+        echo "flush table inet ${NFT_TABLE}"
+        echo "table inet ${NFT_TABLE} {"
+        echo "  set bad_ipv4 {"
+        echo "    type ipv4_addr"
+        echo "    flags interval"
+        if [ -n "$v4_elements" ]; then
+            echo "    elements = { ${v4_elements} }"
+        fi
+        echo "  }"
+        echo "  set bad_ipv6 {"
+        echo "    type ipv6_addr"
+        echo "    flags interval"
+        if [ -n "$v6_elements" ]; then
+            echo "    elements = { ${v6_elements} }"
+        fi
+        echo "  }"
+
+        echo "  chain input {"
+        echo "    type filter hook input priority 0; policy accept;"
+        echo "    ip saddr @bad_ipv4 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+        if [ "$IPV6_ENABLE" -eq 1 ]; then
+            echo "    ip6 saddr @bad_ipv6 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+        fi
+        echo "  }"
+
+        echo "  chain forward {"
+        echo "    type filter hook forward priority 0; policy accept;"
+        echo "    ip saddr @bad_ipv4 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+        if [ "$IPV6_ENABLE" -eq 1 ]; then
+            echo "    ip6 saddr @bad_ipv6 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+        fi
+        echo "  }"
+
+        if [ "$EGF" -ne 0 ]; then
+            echo "  chain output {"
+            echo "    type filter hook output priority 0; policy accept;"
+            echo "    ip daddr @bad_ipv4 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+            if [ "$IPV6_ENABLE" -eq 1 ]; then
+                echo "    ip6 daddr @bad_ipv6 log prefix \"[AUTOSECURE BLOCK] \" limit rate 3/minute drop"
+            fi
+            echo "  }"
+        fi
+        echo "}"
+    } > "$output_rules"
+
+    "$NFT_BIN" -f "$output_rules"
+    _log "[nft] Applied nftables table '${NFT_TABLE}'."
+}
+
+_pf_require_anchor_bootstrap() {
+    if ! grep -q "anchor \"${PF_ANCHOR}\"" /etc/pf.conf; then
+        _die "pf backend requires adding 'anchor \"${PF_ANCHOR}\"' and 'load anchor \"${PF_ANCHOR}\" from \"${PF_ANCHOR_FILE}\"' to /etc/pf.conf"
+    fi
+}
+
+_apply_with_pf() {
+    local list_file="$1"
+
+    if [ "$(uname -s)" != "Darwin" ]; then
+        _die "pf backend is intended for macOS/Darwin."
+    fi
+
+    _pf_require_anchor_bootstrap
+
+    cat > "$PF_ANCHOR_FILE" <<PFEOF
+# Managed by autosecure
+# See /etc/pf.conf for anchor inclusion.
+table <autosecure_bad_hosts> persist
+block in quick from <autosecure_bad_hosts> to any
+PFEOF
+
+    if [ "$EGF" -ne 0 ]; then
+        cat >> "$PF_ANCHOR_FILE" <<PFEOF
+block out quick from any to <autosecure_bad_hosts>
+PFEOF
+    fi
+
+    "$PFCTL_BIN" -a "$PF_ANCHOR" -f "$PF_ANCHOR_FILE"
+    "$PFCTL_BIN" -a "$PF_ANCHOR" -t autosecure_bad_hosts -T replace -f "$list_file"
+    "$PFCTL_BIN" -e >/dev/null 2>&1 || true
+
+    _log "[pf] Applied anchor '${PF_ANCHOR}'."
 }
 
 main() {
@@ -342,23 +495,51 @@ main() {
     fi
 
     _validate_settings
-    _require_cmd iptables
+    _select_downloader
     _require_cmd awk
     _require_cmd grep
     _require_cmd sort
     _require_cmd mkdir
-    _select_downloader
 
-    IPTABLES_BIN="$(command -v iptables)"
+    _detect_firewall_backend
 
-    if [ "$IPV6_ENABLE" -eq 1 ]; then
-        _require_cmd ip6tables
-        IP6TABLES_BIN="$(command -v ip6tables)"
-    fi
-    if [ "$IPSET_ENABLE" -eq 1 ]; then
-        _require_cmd ipset
-        IPSET_BIN="$(command -v ipset)"
-    fi
+    case "$FIREWALL_BACKEND" in
+        iptables)
+            _require_cmd iptables
+            IPTABLES_BIN="$(command -v iptables)"
+            if [ "$IPV6_ENABLE" -eq 1 ]; then
+                _require_cmd ip6tables
+                IP6TABLES_BIN="$(command -v ip6tables)"
+            fi
+            if [ "$IPSET_ENABLE" -eq 1 ]; then
+                _require_cmd ipset
+                IPSET_BIN="$(command -v ipset)"
+            fi
+            ;;
+        nft)
+            _require_cmd nft
+            NFT_BIN="$(command -v nft)"
+            if [ "$IPSET_ENABLE" -eq 1 ]; then
+                _log "IPSET_ENABLE ignored for nft backend."
+            fi
+            ;;
+        pf)
+            _require_cmd pfctl
+            PFCTL_BIN="$(command -v pfctl)"
+            if [ "$IPV6_ENABLE" -eq 0 ]; then
+                _log "pf backend handles both IPv4/IPv6 tables. IPV6_ENABLE ignored."
+            fi
+            if [ "$RULE_POSITION" != "append" ]; then
+                _log "RULE_POSITION ignored for pf backend."
+            fi
+            if [ "$IPSET_ENABLE" -eq 1 ]; then
+                _log "IPSET_ENABLE ignored for pf backend."
+            fi
+            ;;
+        *)
+            _die "Unsupported FIREWALL_BACKEND: ${FIREWALL_BACKEND}"
+            ;;
+    esac
 
     mkdir -p "$TMP_DIR" "$STATE_DIR"
 
@@ -379,13 +560,13 @@ main() {
         _log "Cached latest blocklist to ${CACHE_FILE}."
     fi
 
-    _apply_list_to_family v4 "$active_list"
+    case "$FIREWALL_BACKEND" in
+        iptables) _apply_with_iptables "$active_list" ;;
+        nft) _apply_with_nft "$active_list" ;;
+        pf) _apply_with_pf "$active_list" ;;
+    esac
 
-    if [ "$IPV6_ENABLE" -eq 1 ]; then
-        _apply_list_to_family v6 "$active_list"
-    fi
-
-    _log "Completed."
+    _log "Completed using backend: ${FIREWALL_BACKEND}."
 }
 
 if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then
