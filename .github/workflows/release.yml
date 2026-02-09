@@ -139,13 +139,16 @@ jobs:
         env:
           CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
           CLOUDSMITH_REPO: ${{ vars.CLOUDSMITH_REPO }}
+          CLOUDSMITH_REPO_SECRET: ${{ secrets.CLOUDSMITH_REPO }}
         run: |
           set -euo pipefail
-          if [ -n "${CLOUDSMITH_API_KEY}" ] && [ -n "${CLOUDSMITH_REPO}" ]; then
+          REPO="${CLOUDSMITH_REPO:-${CLOUDSMITH_REPO_SECRET:-}}"
+          if [ -n "${CLOUDSMITH_API_KEY}" ] && [ -n "${REPO}" ]; then
             echo "CLOUDSMITH_ENABLED=1" >> "$GITHUB_ENV"
+            echo "CLOUDSMITH_REPO_EFFECTIVE=${REPO}" >> "$GITHUB_ENV"
           else
             echo "CLOUDSMITH_ENABLED=0" >> "$GITHUB_ENV"
-            echo "Cloudsmith publish disabled (missing CLOUDSMITH_API_KEY or CLOUDSMITH_REPO)."
+            echo "Cloudsmith publish disabled (missing CLOUDSMITH_API_KEY or CLOUDSMITH_REPO/CLOUDSMITH_REPO secret)."
           fi
 
       - name: Verify artifact checksums
@@ -164,7 +167,7 @@ jobs:
         if: ${{ env.CLOUDSMITH_ENABLED == '1' }}
         env:
           CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
-          CLOUDSMITH_REPO: ${{ vars.CLOUDSMITH_REPO }}
+          CLOUDSMITH_REPO: ${{ env.CLOUDSMITH_REPO_EFFECTIVE }}
           CLOUDSMITH_DISTRIBUTION: ${{ vars.CLOUDSMITH_DISTRIBUTION }}
           CLOUDSMITH_RELEASE: ${{ vars.CLOUDSMITH_RELEASE }}
         run: |
@@ -181,7 +184,7 @@ jobs:
         if: ${{ env.CLOUDSMITH_ENABLED == '1' }}
         env:
           CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
-          CLOUDSMITH_REPO: ${{ vars.CLOUDSMITH_REPO }}
+          CLOUDSMITH_REPO: ${{ env.CLOUDSMITH_REPO_EFFECTIVE }}
           CLOUDSMITH_RPM_DISTRIBUTION: ${{ vars.CLOUDSMITH_RPM_DISTRIBUTION }}
           CLOUDSMITH_RPM_RELEASE: ${{ vars.CLOUDSMITH_RPM_RELEASE }}
         run: |
