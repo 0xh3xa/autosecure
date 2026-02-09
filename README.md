@@ -45,6 +45,13 @@ sudo iptables -L Autosecure -n
 ./autosecure.sh -q
 ```
 
+Runtime environment variables:
+
+- `RULE_POSITION=append|top` (default: `append`)
+- `XTABLES_WAIT=<seconds>` to wait for xtables lock (default: `5`)
+- `IPV6_ENABLE=1` to apply IPv6 rules via `ip6tables` (default: `0`)
+- `EGF=0|1` to disable/enable outbound filtering (default: `1`)
+
 ## Automatic Updating
 
 Use `crontab` to refresh rules daily:
@@ -82,8 +89,9 @@ sudo iptables -X AutosecureAct
 
 ## Notes
 
-- This project currently manages IPv4 rules via `iptables` only.
+- By default, this project manages IPv4 rules via `iptables`. Set `IPV6_ENABLE=1` to also manage IPv6 with `ip6tables`.
 - Feed availability/format can change over time. A failed feed is skipped and other feeds still apply.
+- If all feed downloads fail, Autosecure keeps existing rules and falls back to the last cached good blocklist when available (`/var/lib/autosecure/blocked_ips.txt`).
 
 ## Validation
 

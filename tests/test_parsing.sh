@@ -43,4 +43,39 @@ dshield_got="$(_parse_dshield_file "$tmpdir/dshield.txt")"
 dshield_expected=$'1.2.3.0/24\n9.9.9.0/24'
 assert_eq "$dshield_expected" "$dshield_got" "dshield range parsing"
 
+if _is_valid_ip_or_cidr "1.2.3.4"; then
+  printf 'PASS: ipv4 validation\n'
+else
+  printf 'FAIL: ipv4 validation\n'
+  exit 1
+fi
+
+if _is_valid_ip_or_cidr "2001:db8::1/64"; then
+  printf 'PASS: ipv6 validation\n'
+else
+  printf 'FAIL: ipv6 validation\n'
+  exit 1
+fi
+
+if _is_valid_ip_or_cidr "not-an-ip"; then
+  printf 'FAIL: invalid ip rejection\n'
+  exit 1
+else
+  printf 'PASS: invalid ip rejection\n'
+fi
+
+if _ip_matches_family v4 "1.2.3.4" && ! _ip_matches_family v4 "2001:db8::1"; then
+  printf 'PASS: family match v4\n'
+else
+  printf 'FAIL: family match v4\n'
+  exit 1
+fi
+
+if _ip_matches_family v6 "2001:db8::1" && ! _ip_matches_family v6 "1.2.3.4"; then
+  printf 'PASS: family match v6\n'
+else
+  printf 'FAIL: family match v6\n'
+  exit 1
+fi
+
 printf 'All tests passed.\n'
