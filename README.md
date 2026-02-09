@@ -110,24 +110,69 @@ On macOS, the backend `auto` (out of the box setup) selects `pf`, then:
 - Runtime rules are loaded into the `autosecure` anchor and table `autosecure_bad_hosts` via `pfctl`.
 - The common `pfctl -f` warning about flushing startup rules is filtered from output, while real `pfctl` errors are still shown.
 
-### Scheduled Updates via Cron (Linux and Mac)
+### Scheduled Updates via Cron
 
-Example of running everyday at 03:00am
+<details open>
+<summary>Linux (APT/RPM/package install)</summary>
+
+Use the packaged binary path:
+
 ```bash
 crontab -e
-0 3 * * * /usr/local/bin/autosecure.sh -q
+0 3 * * * /usr/local/bin/autosecure -q
+```
+
+</details>
+
+<details>
+<summary>macOS (Homebrew install)</summary>
+
+Use the Homebrew-installed binary path:
+
+```bash
+crontab -e
+0 3 * * * /opt/homebrew/bin/autosecure -q
+```
+
+If you are on Intel macOS Homebrew, use:
+
+```bash
+0 3 * * * /usr/local/bin/autosecure -q
+```
+
+</details>
+
+<details>
+<summary>Script-only install (any OS)</summary>
+
+Use the absolute path where you placed the script:
+
+```bash
+crontab -e
+0 3 * * * /absolute/path/to/autosecure.sh -q
+```
+
+</details>
+
+Tip:
+
+```bash
+command -v autosecure || command -v autosecure.sh
 ```
 
 ## Troubleshooting
 
-Flush chains (iptables):
+<details open>
+<summary>iptables (IPv4)</summary>
+
+Flush chains:
 
 ```bash
 sudo iptables -F Autosecure
 sudo iptables -F AutosecureAct
 ```
 
-Detach chain jumps (iptables):
+Detach chain jumps:
 
 ```bash
 sudo iptables -D INPUT -j Autosecure
@@ -135,13 +180,78 @@ sudo iptables -D FORWARD -j Autosecure
 sudo iptables -D OUTPUT -j Autosecure
 ```
 
-Delete chains (iptables):
+Delete chains:
 
 ```bash
 sudo iptables -X Autosecure
 sudo iptables -X AutosecureAct
 ```
 
+</details>
+
+<details>
+<summary>ip6tables (IPv6 mode)</summary>
+
+If `AUTOSECURE_IPV6_ENABLE=1` was used, clear IPv6 chains similarly:
+
+```bash
+sudo ip6tables -F Autosecure
+sudo ip6tables -F AutosecureAct
+sudo ip6tables -D INPUT -j Autosecure
+sudo ip6tables -D FORWARD -j Autosecure
+sudo ip6tables -D OUTPUT -j Autosecure
+sudo ip6tables -X Autosecure
+sudo ip6tables -X AutosecureAct
+```
+
+</details>
+
+<details>
+<summary>nftables backend</summary>
+
+Inspect table:
+
+```bash
+sudo nft list table inet autosecure
+```
+
+Remove table:
+
+```bash
+sudo nft delete table inet autosecure
+```
+
+</details>
+
+<details>
+<summary>macOS pf backend</summary>
+
+Inspect anchor and table:
+
+```bash
+sudo pfctl -a autosecure -s rules
+sudo pfctl -a autosecure -t autosecure_bad_hosts -T show
+```
+
+Flush block table entries:
+
+```bash
+sudo pfctl -a autosecure -t autosecure_bad_hosts -T flush
+```
+
+Reload anchor file:
+
+```bash
+sudo pfctl -a autosecure -f /etc/pf.anchors/autosecure
+```
+
+Validate main pf config if needed:
+
+```bash
+sudo pfctl -nf /etc/pf.conf
+```
+
+</details>
 ## Contributing
 
 Open an issue for bugs or a pull request for improvements.
