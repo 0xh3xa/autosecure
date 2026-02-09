@@ -1,5 +1,5 @@
 name: autosecure
-arch: __ARCH_RPM__
+arch: __ARCH__
 platform: linux
 version: __VERSION__
 section: net

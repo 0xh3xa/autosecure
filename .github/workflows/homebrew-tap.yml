@@ -1,0 +1,80 @@
+name: Update Homebrew Tap
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.release.tag_name, 'v')
+    steps:
+      - name: Validate tap configuration
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}" ]; then
+            echo "Secret HOMEBREW_TAP_GITHUB_TOKEN is required."
+            exit 1
+          fi
+
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.HOMEBREW_TAP_REPO || 'vincentkoc/homebrew-tap' }}
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      - name: Update formula
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          TARBALL="autosecure-${TAG}.tar.gz"
+          CHECKSUMS_URL="https://github.com/${SOURCE_REPO}/releases/download/${TAG}/sha256sums.txt"
+          TARBALL_URL="https://github.com/${SOURCE_REPO}/releases/download/${TAG}/${TARBALL}"
+
+          curl -fsSL "${CHECKSUMS_URL}" -o /tmp/sha256sums.txt
+          SHA256="$(awk -v f="${TARBALL}" '$2 == f {print $1}' /tmp/sha256sums.txt)"
+          if [ -z "${SHA256}" ]; then
+            echo "Unable to find checksum for ${TARBALL} in sha256sums.txt"
+            exit 1
+          fi
+
+          mkdir -p Formula
+          cat > Formula/autosecure.rb <<EOF
+          class Autosecure < Formula
+            desc "Block known bad IPs from threat feeds using iptables"
+            homepage "https://github.com/${SOURCE_REPO}"
+            url "${TARBALL_URL}"
+            sha256 "${SHA256}"
+            license "GPL-3.0"
+            version "${VERSION}"
+
+            depends_on "bash"
+
+            def install
+              bin.install "autosecure.sh" => "autosecure"
+              doc.install "README.md", "LICENSE.md"
+            end
+          end
+          EOF
+
+      - name: Commit and push formula update
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "No tap changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/autosecure.rb
+          git commit -m "chore: update autosecure formula for ${TAG}"
+          git push
